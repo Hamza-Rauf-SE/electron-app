@@ -1,0 +1,25 @@
+
+> cheating-daddy@0.4.0 start
+> electron-forge start
+
+❯ Checking your system
+❯ Checking package manager version
+✔ Found npm@10.8.2
+✔ Checking your system
+[?25h❯ Locating application
+✔ Locating application
+❯ Loading configuration
+✔ Loading configuration
+❯ Preparing native dependencies
+✔ Preparing native dependencies
+❯ Running generateAssets hook
+✔ Running generateAssets hook
+❯ Running preStart hook
+✔ Running preStart hook
+[?25h
+Initializing random process names for stealth...
+Process name: intelhelperx
+Display name: DriverConverter
+Window title: System Information
+Set process title to: intelhelperx
+Applying anti-analysis measures...

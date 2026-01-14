@@ -46,6 +46,8 @@ function createWindow(sendToRenderer, geminiSessionRef, randomNames = null) {
             enableBlinkFeatures: 'GetDisplayMedia',
             webSecurity: true,
             allowRunningInsecureContent: false,
+            enableWebSQL: false,
+            spellcheck: false,
         },
         backgroundColor: '#00000000',
     });
@@ -58,6 +60,22 @@ function createWindow(sendToRenderer, geminiSessionRef, randomNames = null) {
             });
         },
         { useSystemPicker: true }
+    );
+
+    // Block common sources of SSL errors from background services
+    session.defaultSession.webRequest.onBeforeRequest(
+        {
+            urls: [
+                '*://update.googleapis.com/*',
+                '*://clients2.google.com/*',
+                '*://clients3.google.com/*',
+                '*://clients4.google.com/*',
+                '*://safebrowsing.googleapis.com/*',
+            ],
+        },
+        (details, callback) => {
+            callback({ cancel: true });
+        }
     );
 
     mainWindow.setResizable(false);

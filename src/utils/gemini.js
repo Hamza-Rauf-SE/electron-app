@@ -243,7 +243,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
 
     try {
         const session = await client.live.connect({
-            model: 'gemini-live-2.5-flash-preview',
+            model: 'gemini-2.0-flash-exp',
             callbacks: {
                 onopen: function () {
                     sendToRenderer('update-status', 'Live session connected');
@@ -558,6 +558,88 @@ async function sendAudioToGemini(base64Data, geminiSessionRef) {
     }
 }
 
+// Standard chat (non-realtime) variables
+let standardChatClient = null;
+let standardChatHistory = [];
+
+async function initializeStandardChat(apiKey) {
+    try {
+        standardChatClient = new GoogleGenAI({
+            vertexai: false,
+            apiKey: apiKey,
+        });
+        standardChatHistory = [];
+        console.log('Standard chat initialized');
+        return { success: true };
+    } catch (error) {
+        console.error('Failed to initialize standard chat:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+async function sendStandardChatMessage(message, imageData = null) {
+    if (!standardChatClient) {
+        return { success: false, error: 'Chat not initialized' };
+    }
+
+    try {
+        // Build the message parts
+        const parts = [];
+
+        if (imageData) {
+            parts.push({
+                inlineData: {
+                    data: imageData,
+                    mimeType: 'image/jpeg',
+                },
+            });
+        }
+
+        if (message && message.trim()) {
+            parts.push({ text: message.trim() });
+        }
+
+        // Use the correct API for @google/genai
+        const result = await standardChatClient.models.generateContent({
+            model: 'gemini-2.0-flash-exp',
+            contents: [
+                {
+                    role: 'user',
+                    parts: parts,
+                },
+            ],
+        });
+
+        const text = result.text;
+
+        // Save to chat history
+        standardChatHistory.push({
+            role: 'user',
+            message: message,
+            hasImage: !!imageData,
+            timestamp: Date.now(),
+        });
+        standardChatHistory.push({
+            role: 'model',
+            message: text,
+            timestamp: Date.now(),
+        });
+
+        return { success: true, response: text };
+    } catch (error) {
+        console.error('Error sending standard chat message:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+function getStandardChatHistory() {
+    return standardChatHistory;
+}
+
+function clearStandardChatHistory() {
+    standardChatHistory = [];
+}
+
 function setupGeminiIpcHandlers(geminiSessionRef) {
     // Store the geminiSessionRef globally for reconnection access
     global.geminiSessionRef = geminiSessionRef;
@@ -723,6 +805,47 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             return { success: false, error: error.message };
         }
     });
+
+    // Standard chat (non-realtime) IPC handlers
+    ipcMain.handle('initialize-standard-chat', async (event, apiKey) => {
+        return await initializeStandardChat(apiKey);
+    });
+
+    ipcMain.handle('send-standard-chat-message', async (event, { message, imageData }) => {
+        return await sendStandardChatMessage(message, imageData);
+    });
+
+    ipcMain.handle('get-standard-chat-history', async event => {
+        return { success: true, history: getStandardChatHistory() };
+    });
+
+    ipcMain.handle('clear-standard-chat-history', async event => {
+        clearStandardChatHistory();
+        return { success: true };
+    });
+
+    ipcMain.handle('capture-screenshot-for-chat', async event => {
+        try {
+            const { desktopCapturer } = require('electron');
+
+            const sources = await desktopCapturer.getSources({
+                types: ['screen'],
+                thumbnailSize: { width: 1920, height: 1080 },
+            });
+
+            if (sources.length > 0) {
+                const screenshot = sources[0].thumbnail.toDataURL();
+                // Remove the data:image/png;base64, prefix and return just the base64
+                const base64Data = screenshot.split(',')[1];
+                return { success: true, imageData: base64Data };
+            } else {
+                return { success: false, error: 'No screen sources found' };
+            }
+        } catch (error) {
+            console.error('Error capturing screenshot:', error);
+            return { success: false, error: error.message };
+        }
+    });
 }
 
 module.exports = {
@@ -742,4 +865,8 @@ module.exports = {
     setupGeminiIpcHandlers,
     attemptReconnection,
     formatSpeakerResults,
+    initializeStandardChat,
+    sendStandardChatMessage,
+    getStandardChatHistory,
+    clearStandardChatHistory,
 };

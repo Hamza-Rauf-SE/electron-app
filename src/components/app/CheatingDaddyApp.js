@@ -7,12 +7,17 @@ import { HistoryView } from '../views/HistoryView.js';
 import { AssistantView } from '../views/AssistantView.js';
 import { OnboardingView } from '../views/OnboardingView.js';
 import { AdvancedView } from '../views/AdvancedView.js';
+import { ChatView } from '../views/ChatView.js';
 
 export class CheatingDaddyApp extends LitElement {
     static styles = css`
         * {
             box-sizing: border-box;
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-family:
+                'Inter',
+                -apple-system,
+                BlinkMacSystemFont,
+                sans-serif;
             margin: 0px;
             padding: 0px;
             cursor: default;
@@ -67,7 +72,9 @@ export class CheatingDaddyApp extends LitElement {
         .view-container {
             opacity: 1;
             transform: translateY(0);
-            transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+            transition:
+                opacity 0.15s ease-out,
+                transform 0.15s ease-out;
             height: 100%;
         }
 
@@ -173,7 +180,7 @@ export class CheatingDaddyApp extends LitElement {
 
     setStatus(text) {
         this.statusText = text;
-        
+
         // Mark response as complete when we get certain status messages
         if (text.includes('Ready') || text.includes('Listening') || text.includes('Error')) {
             this._currentResponseIsComplete = true;
@@ -414,6 +421,7 @@ export class CheatingDaddyApp extends LitElement {
                 return html`
                     <main-view
                         .onStart=${() => this.handleStart()}
+                        .onStartChat=${() => this.handleStartChat()}
                         .onAPIKeyHelp=${() => this.handleAPIKeyHelp()}
                         .onLayoutModeChange=${layoutMode => this.handleLayoutModeChange(layoutMode)}
                     ></main-view>
@@ -466,14 +474,25 @@ export class CheatingDaddyApp extends LitElement {
                     ></assistant-view>
                 `;
 
+            case 'chat':
+                return html` <chat-view></chat-view> `;
+
             default:
                 return html`<div>Unknown view: ${this.currentView}</div>`;
         }
     }
 
+    handleStartChat() {
+        this.currentView = 'chat';
+    }
+
     render() {
         const mainContentClass = `main-content ${
-            this.currentView === 'assistant' ? 'assistant-view' : this.currentView === 'onboarding' ? 'onboarding-view' : 'with-border'
+            this.currentView === 'assistant' || this.currentView === 'chat'
+                ? 'assistant-view'
+                : this.currentView === 'onboarding'
+                  ? 'onboarding-view'
+                  : 'with-border'
         }`;
 
         return html`

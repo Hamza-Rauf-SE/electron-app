@@ -99,6 +99,32 @@ export class MainView extends LitElement {
             border-color: var(--start-button-border);
         }
 
+        .button-row {
+            display: flex;
+            gap: 10px;
+            width: 100%;
+        }
+
+        .chat-button {
+            background: transparent;
+            color: var(--start-button-background);
+            border: 1px solid var(--button-border);
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+        }
+
+        .chat-button:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--focus-border-color);
+        }
+
         .shortcut-icons {
             display: flex;
             align-items: center;
@@ -145,6 +171,7 @@ export class MainView extends LitElement {
 
     static properties = {
         onStart: { type: Function },
+        onStartChat: { type: Function },
         onAPIKeyHelp: { type: Function },
         isInitializing: { type: Boolean },
         onLayoutModeChange: { type: Function },
@@ -154,6 +181,7 @@ export class MainView extends LitElement {
     constructor() {
         super();
         this.onStart = () => {};
+        this.onStartChat = () => {};
         this.onAPIKeyHelp = () => {};
         this.isInitializing = false;
         this.onLayoutModeChange = () => {};
@@ -206,6 +234,15 @@ export class MainView extends LitElement {
             return;
         }
         this.onStart();
+    }
+
+    handleStartChatClick() {
+        const apiKey = localStorage.getItem('apiKey')?.trim();
+        if (!apiKey) {
+            this.triggerApiKeyError();
+            return;
+        }
+        this.onStartChat();
     }
 
     handleAPIKeyHelpClick() {
@@ -293,10 +330,15 @@ export class MainView extends LitElement {
                     @input=${this.handleInput}
                     class="${this.showApiKeyError ? 'api-key-error' : ''}"
                 />
+            </div>
+
+            <div class="button-row">
                 <button @click=${this.handleStartClick} class="start-button ${this.isInitializing ? 'initializing' : ''}">
                     ${this.getStartButtonText()}
                 </button>
+                <button @click=${this.handleStartChatClick} class="chat-button">💬 Start Chat</button>
             </div>
+
             <p class="description">
                 dont have an api key?
                 <span @click=${this.handleAPIKeyHelpClick} class="link">get one here</span>
