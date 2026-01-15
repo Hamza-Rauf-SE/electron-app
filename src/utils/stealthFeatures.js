@@ -91,19 +91,22 @@ function startTitleRandomization(mainWindow) {
     ];
 
     // Change title every 30-60 seconds
-    const interval = setInterval(() => {
-        try {
-            if (!mainWindow.isDestroyed()) {
-                const randomTitle = titles[Math.floor(Math.random() * titles.length)];
-                mainWindow.setTitle(randomTitle);
-            } else {
+    const interval = setInterval(
+        () => {
+            try {
+                if (!mainWindow.isDestroyed()) {
+                    const randomTitle = titles[Math.floor(Math.random() * titles.length)];
+                    mainWindow.setTitle(randomTitle);
+                } else {
+                    clearInterval(interval);
+                }
+            } catch (error) {
+                console.warn('Could not update window title:', error.message);
                 clearInterval(interval);
             }
-        } catch (error) {
-            console.warn('Could not update window title:', error.message);
-            clearInterval(interval);
-        }
-    }, 30000 + Math.random() * 30000); // 30-60 seconds
+        },
+        30000 + Math.random() * 30000
+    ); // 30-60 seconds
 
     return interval;
 }
@@ -126,8 +129,80 @@ function applyAntiAnalysisMeasures() {
     });
 }
 
+/**
+ * Configure stealth screenshot capture settings
+ * Should be called after session is ready
+ */
+function configureStealthScreenCapture() {
+    // Suppress any screen recording indicators on macOS
+    if (process.platform === 'darwin') {
+        try {
+            const { session } = require('electron');
+
+            // Set permissions to avoid triggering macOS recording indicators
+            session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+                // Auto-grant screen capture permissions silently
+                if (permission === 'media' || permission === 'screen') {
+                    callback(true);
+                } else {
+                    callback(false);
+                }
+            });
+
+            // Override media device detection to avoid OS-level indicators
+            session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+                // Always return true for media/screen to avoid prompts
+                if (permission === 'media' || permission === 'screen') {
+                    return true;
+                }
+                return false;
+            });
+
+            console.log('Stealth screen capture configured');
+        } catch (error) {
+            console.warn('Could not configure stealth capture:', error.message);
+        }
+    }
+}
+
+/**
+ * Apply additional anti-detection measures for screen capture
+ */
+function applyScreenCaptureAntiDetection() {
+    // Override console methods to prevent screenshot capture logs
+    const originalConsoleLog = console.log;
+    const originalConsoleError = console.error;
+
+    console.log = (...args) => {
+        const message = args.join(' ');
+        if (!message.includes('screenshot') && !message.includes('capture') && !message.includes('screen')) {
+            originalConsoleLog.apply(console, args);
+        }
+    };
+
+    console.error = (...args) => {
+        const message = args.join(' ');
+        if (!message.includes('screenshot') && !message.includes('capture') && !message.includes('screen')) {
+            originalConsoleError.apply(console, args);
+        }
+    };
+
+    // Prevent memory dumps from revealing screenshot data
+    if (global.gc) {
+        setInterval(() => {
+            try {
+                global.gc();
+            } catch (e) {
+                // GC not exposed
+            }
+        }, 60000); // Force garbage collection every minute
+    }
+}
+
 module.exports = {
     applyStealthMeasures,
     startTitleRandomization,
     applyAntiAnalysisMeasures,
+    configureStealthScreenCapture,
+    applyScreenCaptureAntiDetection,
 };

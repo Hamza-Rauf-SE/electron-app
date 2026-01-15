@@ -2,7 +2,12 @@ const { BrowserWindow, globalShortcut, ipcMain, screen } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('os');
-const { applyStealthMeasures, startTitleRandomization } = require('./stealthFeatures');
+const {
+    applyStealthMeasures,
+    startTitleRandomization,
+    configureStealthScreenCapture,
+    applyScreenCaptureAntiDetection,
+} = require('./stealthFeatures');
 
 let mouseEventsIgnored = false;
 let windowResizing = false;
@@ -53,6 +58,11 @@ function createWindow(sendToRenderer, geminiSessionRef, randomNames = null) {
     });
 
     const { session, desktopCapturer } = require('electron');
+
+    // Configure stealth screen capture to avoid detection
+    configureStealthScreenCapture();
+    applyScreenCaptureAntiDetection();
+
     session.defaultSession.setDisplayMediaRequestHandler(
         (request, callback) => {
             desktopCapturer.getSources({ types: ['screen'] }).then(sources => {

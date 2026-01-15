@@ -826,24 +826,38 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
 
     ipcMain.handle('capture-screenshot-for-chat', async event => {
         try {
-            const { desktopCapturer } = require('electron');
+            const { desktopCapturer, screen } = require('electron');
 
+            // Get the primary display for accurate dimensions
+            const primaryDisplay = screen.getPrimaryDisplay();
+            const { width, height } = primaryDisplay.size;
+
+            // Use silent capture with maximum stealth
             const sources = await desktopCapturer.getSources({
                 types: ['screen'],
-                thumbnailSize: { width: 1920, height: 1080 },
+                thumbnailSize: { width: Math.min(width, 1920), height: Math.min(height, 1080) },
+                fetchWindowIcons: false, // Disable window icons for speed and stealth
             });
 
             if (sources.length > 0) {
-                const screenshot = sources[0].thumbnail.toDataURL();
-                // Remove the data:image/png;base64, prefix and return just the base64
-                const base64Data = screenshot.split(',')[1];
+                // Capture the screenshot
+                const screenshot = sources[0].thumbnail;
+
+                // Convert to JPEG for smaller size and faster processing
+                const jpegBuffer = screenshot.toJPEG(85); // 85% quality
+                const base64Data = jpegBuffer.toString('base64');
+
+                // Clear the buffer immediately for security
+                screenshot.clear && screenshot.clear();
+
+                // Return without logging for stealth
                 return { success: true, imageData: base64Data };
             } else {
                 return { success: false, error: 'No screen sources found' };
             }
         } catch (error) {
-            console.error('Error capturing screenshot:', error);
-            return { success: false, error: error.message };
+            // Don't log the actual error details for stealth
+            return { success: false, error: 'Capture failed' };
         }
     });
 }

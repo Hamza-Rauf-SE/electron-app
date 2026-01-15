@@ -338,17 +338,9 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             videoTrack: mediaStream.getVideoTracks()[0]?.getSettings(),
         });
 
-        // Start capturing screenshots - check if manual mode
-        if (screenshotIntervalSeconds === 'manual' || screenshotIntervalSeconds === 'Manual') {
-            console.log('Manual mode enabled - screenshots will be captured on demand only');
-            // Don't start automatic capture in manual mode
-        } else {
-            const intervalMilliseconds = parseInt(screenshotIntervalSeconds) * 1000;
-            screenshotInterval = setInterval(() => captureScreenshot(imageQuality), intervalMilliseconds);
-
-            // Capture first screenshot immediately
-            setTimeout(() => captureScreenshot(imageQuality), 100);
-        }
+        // Automatic screenshot capture disabled for stealth
+        // Screenshots are only captured manually via the chat interface
+        console.log('Automatic screenshot capture disabled - use chat module for manual screenshots');
     } catch (err) {
         console.error('Error starting capture:', err);
         cheddar.setStatus('error');
@@ -449,24 +441,14 @@ function setupWindowsLoopbackProcessing() {
 }
 
 async function captureScreenshot(imageQuality = 'medium', isManual = false) {
-    console.log(`Capturing ${isManual ? 'manual' : 'automated'} screenshot...`);
-    if (!mediaStream) return;
-
-    // Manual screenshots always work regardless of the setting
-    // The setting only controls automatic screenshots
+    // Only manual screenshots are allowed - automatic capture is disabled for stealth
     if (!isManual) {
-        const sendScreenshotsEnabled = localStorage.getItem('sendScreenshotsEnabled') !== 'false';
-        if (!sendScreenshotsEnabled) {
-            console.log('Screenshot sending is disabled in settings; skipping upload.');
-            return;
-        }
-
-        // Check rate limiting for automated screenshots only
-        if (tokenTracker.shouldThrottle()) {
-            console.log('⚠️ Automated screenshot skipped due to rate limiting');
-            return;
-        }
+        console.log('Automatic screenshot capture is disabled');
+        return;
     }
+
+    console.log('Capturing manual screenshot...');
+    if (!mediaStream) return;
 
     // Lazy init of video element
     if (!hiddenVideo) {

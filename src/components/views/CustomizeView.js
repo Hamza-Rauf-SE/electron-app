@@ -975,7 +975,8 @@ export class CustomizeView extends LitElement {
                     <div class="form-grid">
                         <div class="form-group">
                             <label class="form-label">Audio Mode</label>
-                            <select class="form-control" .value=${localStorage.getItem('audioMode') || 'speaker_only'} @change=${e => localStorage.setItem('audioMode', e.target.value)}>
+                            <select class="form-control" .value=${localStorage.getItem('audioMode') || 'speaker_only'} @change=${e =>
+                                localStorage.setItem('audioMode', e.target.value)}>
                                 <option value="speaker_only">Speaker Only (Interviewer)</option>
                                 <option value="mic_only">Microphone Only (Me)</option>
                                 <option value="both">Both Speaker & Microphone</option>
@@ -987,21 +988,11 @@ export class CustomizeView extends LitElement {
 
                         <div class="form-group full-width">
                             <label class="form-label">
-                                Share Screenshots with AI
-                                <span class="current-selection">${this.sendScreenshotsEnabled ? 'Enabled' : 'Disabled'}</span>
+                                Manual Screenshots (Chat Module Only)
+                                <span class="current-selection" style="color: #4caf50;">Active</span>
                             </label>
-                            <label class="toggle-control">
-                                <input
-                                    type="checkbox"
-                                    class="toggle-checkbox"
-                                    .checked=${this.sendScreenshotsEnabled}
-                                    @change=${this.handleSendScreenshotsToggle}
-                                />
-                                <span class="toggle-slider"></span>
-                                <span class="toggle-text">${this.sendScreenshotsEnabled ? 'Sending' : 'Not Sending'}</span>
-                            </label>
-                            <div class="form-description">
-                                When disabled, screenshots will not be uploaded to Gemini and only audio/text will be sent.
+                            <div class="form-description" style="padding: 12px; background: rgba(76, 175, 80, 0.1); border-left: 3px solid #4caf50; border-radius: 4px;">
+                                📷 <strong>Stealth Mode Active:</strong> Automatic screenshots are disabled. Use the chat module's camera button to capture screenshots manually when needed.
                             </div>
                         </div>
                     </div>
@@ -1156,19 +1147,13 @@ export class CustomizeView extends LitElement {
                                         >${this.selectedScreenshotInterval === 'manual' ? 'Manual' : this.selectedScreenshotInterval + 's'}</span
                                     >
                                 </label>
-                                <select class="form-control" .value=${this.selectedScreenshotInterval} @change=${this.handleScreenshotIntervalSelect}>
-                                    <option value="manual" ?selected=${this.selectedScreenshotInterval === 'manual'}>Manual (On demand)</option>
-                                    <option value="1" ?selected=${this.selectedScreenshotInterval === '1'}>Every 1 second</option>
-                                    <option value="2" ?selected=${this.selectedScreenshotInterval === '2'}>Every 2 seconds</option>
-                                    <option value="5" ?selected=${this.selectedScreenshotInterval === '5'}>Every 5 seconds</option>
-                                    <option value="10" ?selected=${this.selectedScreenshotInterval === '10'}>Every 10 seconds</option>
+                                <select class="form-control" .value=${this.selectedScreenshotInterval} @change=${
+                                    this.handleScreenshotIntervalSelect
+                                } disabled>
+                                    <option value="manual" selected>Manual Only (Stealth Mode)</option>
                                 </select>
-                                <div class="form-description">
-                                    ${
-                                        this.selectedScreenshotInterval === 'manual'
-                                            ? 'Screenshots will only be taken when you use the "Ask Next Step" shortcut'
-                                            : 'Automatic screenshots will be taken at the specified interval'
-                                    }
+                                <div class="form-description" style="color: #4caf50; font-weight: 500;">
+                                    ⚠️ Automatic screenshots disabled for maximum stealth. Use the chat module's camera button for manual screenshots.
                                 </div>
                             </div>
 
@@ -1189,8 +1174,8 @@ export class CustomizeView extends LitElement {
                                         this.selectedImageQuality === 'high'
                                             ? 'Best quality, uses more tokens'
                                             : this.selectedImageQuality === 'medium'
-                                              ? 'Balanced quality and token usage'
-                                              : 'Lower quality, uses fewer tokens'
+                                            ? 'Balanced quality and token usage'
+                                            : 'Lower quality, uses fewer tokens'
                                     }
                                 </div>
                             </div>
