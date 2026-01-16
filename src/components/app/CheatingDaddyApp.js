@@ -165,6 +165,17 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.on('click-through-toggled', (_, isEnabled) => {
                 this._isClickThrough = isEnabled;
             });
+            ipcRenderer.on('response-complete', () => {
+                console.log('[response-complete] Received signal - marking for new response');
+                this._awaitingNewResponse = true;
+                this._currentResponseIsComplete = true;
+                console.log(
+                    '[response-complete] Flags set - _awaitingNewResponse:',
+                    this._awaitingNewResponse,
+                    '_currentResponseIsComplete:',
+                    this._currentResponseIsComplete
+                );
+            });
         }
     }
 
@@ -175,47 +186,41 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.removeAllListeners('update-response');
             ipcRenderer.removeAllListeners('update-status');
             ipcRenderer.removeAllListeners('click-through-toggled');
+            ipcRenderer.removeAllListeners('response-complete');
         }
     }
 
     setStatus(text) {
         this.statusText = text;
-
-        // Mark response as complete when we get certain status messages
-        if (text.includes('Ready') || text.includes('Listening') || text.includes('Error')) {
-            this._currentResponseIsComplete = true;
-            console.log('[setStatus] Marked current response as complete');
-        }
+        // Note: We no longer set _currentResponseIsComplete here
+        // because we now rely on explicit 'response-complete' events
     }
 
     setResponse(response) {
-        // Check if this looks like a filler response (very short responses to hmm, ok, etc)
-        const isFillerResponse =
-            response.length < 30 &&
-            (response.toLowerCase().includes('hmm') ||
-                response.toLowerCase().includes('okay') ||
-                response.toLowerCase().includes('next') ||
-                response.toLowerCase().includes('go on') ||
-                response.toLowerCase().includes('continue'));
+        const preview = response.substring(0, 50).replace(/\n/g, ' ');
+        console.log(
+            '[setResponse] Called with:',
+            preview + '... (len=' + response.length + ') awaiting=' + this._awaitingNewResponse + ' complete=' + this._currentResponseIsComplete
+        );
 
         if (this._awaitingNewResponse || this.responses.length === 0) {
-            // Always add as new response when explicitly waiting for one
+            // Always add as new response when explicitly waiting for one or if no responses exist
             this.responses = [...this.responses, response];
             this.currentResponseIndex = this.responses.length - 1;
             this._awaitingNewResponse = false;
             this._currentResponseIsComplete = false;
-            console.log('[setResponse] Pushed new response:', response);
-        } else if (!this._currentResponseIsComplete && !isFillerResponse && this.responses.length > 0) {
-            // For substantial responses, update the last one (streaming behavior)
+            console.log('[setResponse] → PUSHED NEW response #' + this.responses.length);
+        } else if (!this._currentResponseIsComplete && this.responses.length > 0) {
+            // Update the last response (streaming behavior)
             // Only update if the current response is not marked as complete
             this.responses = [...this.responses.slice(0, this.responses.length - 1), response];
-            console.log('[setResponse] Updated last response:', response);
+            console.log('[setResponse] → UPDATED existing response #' + this.responses.length);
         } else {
-            // For filler responses or when current response is complete, add as new
+            // When current response is complete, add as new
             this.responses = [...this.responses, response];
             this.currentResponseIndex = this.responses.length - 1;
             this._currentResponseIsComplete = false;
-            console.log('[setResponse] Added response as new:', response);
+            console.log('[setResponse] → ADDED NEW (complete was true) #' + this.responses.length);
         }
         this.shouldAnimateResponse = true;
         this.requestUpdate();
@@ -290,8 +295,11 @@ export class CheatingDaddyApp extends LitElement {
         cheddar.startCapture(this.selectedScreenshotInterval, this.selectedImageQuality);
         this.responses = [];
         this.currentResponseIndex = -1;
+        this._awaitingNewResponse = false;
+        this._currentResponseIsComplete = false;
         this.startTime = Date.now();
         this.currentView = 'assistant';
+        console.log('[handleStart] Session started - flags reset');
     }
 
     async handleAPIKeyHelp() {
@@ -491,8 +499,8 @@ export class CheatingDaddyApp extends LitElement {
             this.currentView === 'assistant' || this.currentView === 'chat'
                 ? 'assistant-view'
                 : this.currentView === 'onboarding'
-                  ? 'onboarding-view'
-                  : 'with-border'
+                ? 'onboarding-view'
+                : 'with-border'
         }`;
 
         return html`

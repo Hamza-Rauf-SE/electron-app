@@ -155,6 +155,17 @@ export class AssistantView extends LitElement {
             margin: 2em 0;
         }
 
+        /* Response item separation */
+        .response-item {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .response-item:last-child {
+            border-bottom: none;
+        }
+
         .response-container table {
             border-collapse: collapse;
             width: 100%;
@@ -363,6 +374,10 @@ export class AssistantView extends LitElement {
             : `Hey, Im listening to your ${profileNames[this.selectedProfile] || 'session'}?`;
     }
 
+    getAllResponses() {
+        return this.responses.length > 0 ? this.responses : [];
+    }
+
     renderMarkdown(content) {
         // Check if marked is available
         if (typeof window !== 'undefined' && window.marked) {
@@ -549,6 +564,16 @@ export class AssistantView extends LitElement {
         }, 0);
     }
 
+    scrollToResponseItem(index) {
+        setTimeout(() => {
+            const container = this.shadowRoot.querySelector('.response-container');
+            const responseItem = this.shadowRoot.querySelector(`.response-item[data-response-index="${index}"]`);
+            if (container && responseItem) {
+                responseItem.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }, 0);
+    }
+
     saveCurrentResponse() {
         const currentResponse = this.getCurrentResponse();
         if (currentResponse && !this.isResponseSaved()) {
@@ -623,47 +648,97 @@ export class AssistantView extends LitElement {
 
     updated(changedProperties) {
         super.updated(changedProperties);
-        if (changedProperties.has('responses') || changedProperties.has('currentResponseIndex')) {
-            if (changedProperties.has('currentResponseIndex')) {
+        if (changedProperties.has('responses')) {
+            // Reset animation count when responses change (new response added)
+            const oldResponses = changedProperties.get('responses');
+            if (!oldResponses || oldResponses.length !== this.responses.length) {
                 this._lastAnimatedWordCount = 0;
             }
             this.updateResponseContent();
+        }
+        if (changedProperties.has('currentResponseIndex')) {
+            // Scroll to the response item when navigating
+            this.scrollToResponseItem(this.currentResponseIndex);
         }
     }
 
     updateResponseContent() {
         console.log('updateResponseContent called');
         const container = this.shadowRoot.querySelector('#responseContainer');
-        if (container) {
-            const currentResponse = this.getCurrentResponse();
-            console.log('Current response:', currentResponse);
-            const renderedResponse = this.renderMarkdown(currentResponse);
-            console.log('Rendered response:', renderedResponse);
-            container.innerHTML = renderedResponse;
+        if (!container) {
+            console.log('Response container not found');
+            return;
+        }
+
+        const allResponses = this.getAllResponses();
+
+        if (allResponses.length === 0) {
+            // Show welcome message if no responses
+            const profileNames = this.getProfileNames();
+            const welcomeMessage = `Hey, Im listening to your ${profileNames[this.selectedProfile] || 'session'}?`;
+            const renderedWelcome = this.renderMarkdown(welcomeMessage);
+            container.innerHTML = renderedWelcome;
             const words = container.querySelectorAll('[data-word]');
-            if (this.shouldAnimateResponse) {
-                for (let i = 0; i < this._lastAnimatedWordCount && i < words.length; i++) {
-                    words[i].classList.add('visible');
+            words.forEach(word => word.classList.add('visible'));
+            return;
+        }
+
+        // Render all responses with separators
+        let allHtml = '';
+        allResponses.forEach((response, index) => {
+            const renderedResponse = this.renderMarkdown(response);
+
+            allHtml += `
+                <div class="response-item" data-response-index="${index}">
+                    ${renderedResponse}
+                </div>
+            `;
+        });
+
+        container.innerHTML = allHtml;
+
+        // Handle animation for the latest response
+        const words = container.querySelectorAll('[data-word]');
+        if (this.shouldAnimateResponse && allResponses.length > 0) {
+            // Only animate words in the last response item
+            const lastResponseItem = container.querySelector(`.response-item[data-response-index="${allResponses.length - 1}"]`);
+            if (lastResponseItem) {
+                const lastResponseWords = lastResponseItem.querySelectorAll('[data-word]');
+
+                // Make all previous words visible immediately
+                words.forEach(word => {
+                    if (!lastResponseItem.contains(word)) {
+                        word.classList.add('visible');
+                    }
+                });
+
+                // Animate the latest response
+                for (let i = 0; i < this._lastAnimatedWordCount && i < lastResponseWords.length; i++) {
+                    lastResponseWords[i].classList.add('visible');
                 }
-                for (let i = this._lastAnimatedWordCount; i < words.length; i++) {
-                    words[i].classList.remove('visible');
+                for (let i = this._lastAnimatedWordCount; i < lastResponseWords.length; i++) {
+                    lastResponseWords[i].classList.remove('visible');
                     setTimeout(
                         () => {
-                            words[i].classList.add('visible');
-                            if (i === words.length - 1) {
+                            lastResponseWords[i].classList.add('visible');
+                            if (i === lastResponseWords.length - 1) {
                                 this.dispatchEvent(new CustomEvent('response-animation-complete', { bubbles: true, composed: true }));
+                                // Scroll to bottom after animation
+                                this.scrollToBottom();
                             }
                         },
                         (i - this._lastAnimatedWordCount) * 100
                     );
                 }
-                this._lastAnimatedWordCount = words.length;
-            } else {
-                words.forEach(word => word.classList.add('visible'));
-                this._lastAnimatedWordCount = words.length;
+                this._lastAnimatedWordCount = lastResponseWords.length;
             }
         } else {
-            console.log('Response container not found');
+            words.forEach(word => word.classList.add('visible'));
+            this._lastAnimatedWordCount = 0;
+            // Scroll to bottom for new content
+            if (allResponses.length > 0) {
+                this.scrollToBottom();
+            }
         }
     }
 

@@ -279,7 +279,26 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                     }
 
                     if (message.serverContent?.turnComplete) {
-                        sendToRenderer('update-status', 'Listening...');
+                        // Send final response update if there's content
+                        if (messageBuffer) {
+                            sendToRenderer('update-response', messageBuffer);
+
+                            // Save conversation turn when we have both transcription and AI response
+                            if (currentTranscription && messageBuffer) {
+                                saveConversationTurn(currentTranscription, messageBuffer);
+                                currentTranscription = ''; // Reset for next turn
+                            }
+
+                            messageBuffer = '';
+                        }
+
+                        // Signal that the current response is complete
+                        // Add a small delay to ensure all update-response events are processed first
+                        console.log('[turnComplete] Signaling response-complete (with delay)');
+                        setTimeout(() => {
+                            sendToRenderer('response-complete', true);
+                            sendToRenderer('update-status', 'Listening...');
+                        }, 100);
                     }
                 },
                 onerror: function (e) {
