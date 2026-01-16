@@ -565,7 +565,10 @@ async function sendAudioToGemini(base64Data, geminiSessionRef) {
     if (!geminiSessionRef.current) return;
 
     try {
-        process.stdout.write('.');
+        // Write progress indicator only if stdout is writable
+        if (process.stdout && process.stdout.writable) {
+            process.stdout.write('.');
+        }
         await geminiSessionRef.current.sendRealtimeInput({
             audio: {
                 data: base64Data,
@@ -675,7 +678,9 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     ipcMain.handle('send-audio-content', async (event, { data, mimeType }) => {
         if (!geminiSessionRef.current) return { success: false, error: 'No active Gemini session' };
         try {
-            process.stdout.write('.');
+            if (process.stdout && process.stdout.writable) {
+                process.stdout.write('.');
+            }
             await geminiSessionRef.current.sendRealtimeInput({
                 audio: { data: data, mimeType: mimeType },
             });
@@ -690,7 +695,9 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     ipcMain.handle('send-mic-audio-content', async (event, { data, mimeType }) => {
         if (!geminiSessionRef.current) return { success: false, error: 'No active Gemini session' };
         try {
-            process.stdout.write(',');
+            if (process.stdout && process.stdout.writable) {
+                process.stdout.write(',');
+            }
             await geminiSessionRef.current.sendRealtimeInput({
                 audio: { data: data, mimeType: mimeType },
             });
@@ -717,7 +724,9 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 return { success: false, error: 'Image buffer too small' };
             }
 
-            process.stdout.write('!');
+            if (process.stdout && process.stdout.writable) {
+                process.stdout.write('!');
+            }
             await geminiSessionRef.current.sendRealtimeInput({
                 media: { data: data, mimeType: 'image/jpeg' },
             });

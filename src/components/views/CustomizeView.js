@@ -649,7 +649,7 @@ export class CustomizeView extends LitElement {
     }
 
     getDefaultKeybinds() {
-        const isMac = cheddar.isMacOS || navigator.platform.includes('Mac');
+        const isMac = audioprocess.isMacOS || navigator.platform.includes('Mac');
         return {
             moveUp: isMac ? 'Alt+Up' : 'Ctrl+Up',
             moveDown: isMac ? 'Alt+Down' : 'Ctrl+Down',
@@ -671,7 +671,7 @@ export class CustomizeView extends LitElement {
     loadKeybinds() {
         const savedKeybinds = localStorage.getItem('customKeybinds');
         const defaults = this.getDefaultKeybinds();
-        const isMac = cheddar.isMacOS || navigator.platform.includes('Mac');
+        const isMac = audioprocess.isMacOS || navigator.platform.includes('Mac');
         let migrated = false;
 
         if (savedKeybinds) {

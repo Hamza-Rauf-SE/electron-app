@@ -30,7 +30,7 @@ module.exports = {
         {
             name: '@electron-forge/maker-squirrel',
             config: {
-                name: 'cheating-daddy',
+                name: 'audio-process',
                 productName: 'Cheating Daddy',
                 shortcutName: 'Cheating Daddy',
                 createDesktopShortcut: true,

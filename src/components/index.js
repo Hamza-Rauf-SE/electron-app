@@ -1,5 +1,5 @@
 // Main app components
-export { CheatingDaddyApp } from './app/CheatingDaddyApp.js';
+export { AudioProcessApp } from './app/AudioProcessApp.js';
 export { AppHeader } from './app/AppHeader.js';
 
 // View components

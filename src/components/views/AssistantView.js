@@ -601,7 +601,7 @@ export class AssistantView extends LitElement {
         const userMessage = textInput?.value.trim() || 'What do you see in this screenshot? Please analyze it and provide a detailed response.';
 
         // Check if capture is active
-        if (!window.cheddar || !window.cheddar.captureScreenshot) {
+        if (!window.audioprocess || !window.audioprocess.captureScreenshot) {
             alert('Screenshot capture is not available. Please start a session first.');
             return;
         }
@@ -620,7 +620,7 @@ export class AssistantView extends LitElement {
             const imageQuality = localStorage.getItem('selectedImageQuality') || 'medium';
 
             // Capture screenshot (this sends the image to Gemini)
-            await window.cheddar.captureScreenshot(imageQuality, true);
+            await window.audioprocess.captureScreenshot(imageQuality, true);
 
             // Wait a bit for the image to be sent to the server
             await new Promise(resolve => setTimeout(resolve, 1500));
