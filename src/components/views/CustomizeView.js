@@ -465,6 +465,8 @@ export class CustomizeView extends LitElement {
         onLayoutModeChange: { type: Function },
         advancedMode: { type: Boolean },
         onAdvancedModeChange: { type: Function },
+        themeMode: { type: String },
+        onThemeModeChange: { type: Function },
     };
 
     constructor() {
@@ -483,6 +485,10 @@ export class CustomizeView extends LitElement {
         this.onImageQualityChange = () => {};
         this.onLayoutModeChange = () => {};
         this.onAdvancedModeChange = () => {};
+        this.onThemeModeChange = () => {};
+
+        // Theme mode default
+        this.themeMode = 'dark';
 
         // Google Search default
         this.googleSearchEnabled = true;
@@ -499,6 +505,7 @@ export class CustomizeView extends LitElement {
         this.loadKeybinds();
         this.loadGoogleSearchSettings();
         this.loadAdvancedModeSettings();
+        this.loadThemeModeSettings();
         this.loadBackgroundTransparency();
         this.loadFontSize();
     }
@@ -509,6 +516,16 @@ export class CustomizeView extends LitElement {
         this.loadLayoutMode();
         // Resize window for this view
         resizeLayout();
+
+        // Force update keybinds to main process after migration
+        // This ensures shortcuts are re-registered with new values
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            setTimeout(() => {
+                ipcRenderer.send('update-keybinds', this.keybinds);
+                console.log('Keybinds sent to main process:', this.keybinds);
+            }, 100);
+        }
     }
 
     getProfiles() {
@@ -645,18 +662,50 @@ export class CustomizeView extends LitElement {
             nextResponse: isMac ? 'Cmd+]' : 'Ctrl+]',
             scrollUp: isMac ? 'Cmd+Shift+Up' : 'Ctrl+Shift+Up',
             scrollDown: isMac ? 'Cmd+Shift+Down' : 'Ctrl+Shift+Down',
+            increaseTransparency: isMac ? 'Cmd+Shift+I' : 'Ctrl+Shift+I',
+            decreaseTransparency: isMac ? 'Cmd+Shift+D' : 'Ctrl+Shift+D',
+            toggleTheme: isMac ? 'Cmd+Shift+T' : 'Ctrl+Shift+T',
         };
     }
 
     loadKeybinds() {
         const savedKeybinds = localStorage.getItem('customKeybinds');
+        const defaults = this.getDefaultKeybinds();
+        const isMac = cheddar.isMacOS || navigator.platform.includes('Mac');
+        let migrated = false;
+
         if (savedKeybinds) {
             try {
-                this.keybinds = { ...this.getDefaultKeybinds(), ...JSON.parse(savedKeybinds) };
+                const parsed = JSON.parse(savedKeybinds);
+                this.keybinds = { ...defaults, ...parsed };
+
+                // Migration: Update old default shortcuts to new ones
+                const oldDefaults = {
+                    increaseTransparency: isMac ? 'Cmd+I' : 'Ctrl+I',
+                    decreaseTransparency: isMac ? 'Cmd+D' : 'Ctrl+D',
+                    toggleTheme: isMac ? 'Cmd+T' : 'Ctrl+T',
+                };
+
+                // If the saved value matches the old default, update to new default
+                for (const key in oldDefaults) {
+                    if (this.keybinds[key] === oldDefaults[key]) {
+                        this.keybinds[key] = defaults[key];
+                        migrated = true;
+                        console.log(`Migrated ${key} from ${oldDefaults[key]} to ${defaults[key]}`);
+                    }
+                }
+
+                // Save the migrated keybinds
+                if (migrated) {
+                    localStorage.setItem('customKeybinds', JSON.stringify(this.keybinds));
+                    console.log('Keybinds migrated and saved');
+                }
             } catch (e) {
                 console.error('Failed to parse saved keybinds:', e);
-                this.keybinds = this.getDefaultKeybinds();
+                this.keybinds = defaults;
             }
+        } else {
+            this.keybinds = defaults;
         }
     }
 
@@ -741,6 +790,21 @@ export class CustomizeView extends LitElement {
                 key: 'scrollDown',
                 name: 'Scroll Response Down',
                 description: 'Scroll the AI response content down',
+            },
+            {
+                key: 'increaseTransparency',
+                name: 'Increase Transparency',
+                description: 'Increase background transparency (make more transparent)',
+            },
+            {
+                key: 'decreaseTransparency',
+                name: 'Decrease Transparency',
+                description: 'Decrease background transparency (make more opaque)',
+            },
+            {
+                key: 'toggleTheme',
+                name: 'Toggle Theme',
+                description: 'Toggle between light mode and dark mode',
             },
         ];
     }
@@ -862,6 +926,20 @@ export class CustomizeView extends LitElement {
         this.advancedMode = e.target.checked;
         localStorage.setItem('advancedMode', this.advancedMode.toString());
         this.onAdvancedModeChange(this.advancedMode);
+        this.requestUpdate();
+    }
+
+    loadThemeModeSettings() {
+        const themeMode = localStorage.getItem('themeMode');
+        if (themeMode !== null) {
+            this.themeMode = themeMode;
+        }
+    }
+
+    async handleThemeModeChange(e) {
+        this.themeMode = e.target.checked ? 'light' : 'dark';
+        localStorage.setItem('themeMode', this.themeMode);
+        this.onThemeModeChange(this.themeMode);
         this.requestUpdate();
     }
 
@@ -1058,6 +1136,24 @@ export class CustomizeView extends LitElement {
                     </div>
 
                     <div class="form-grid">
+                        <div class="checkbox-group">
+                            <input
+                                type="checkbox"
+                                class="checkbox-input"
+                                id="theme-mode"
+                                .checked=${this.themeMode === 'light'}
+                                @change=${this.handleThemeModeChange}
+                            />
+                            <label for="theme-mode" class="checkbox-label"> Light Mode </label>
+                        </div>
+                        <div class="form-description" style="margin-left: 24px; margin-top: -8px;">
+                            ${
+                                this.themeMode === 'light'
+                                    ? 'Currently using light mode with white background and dark text'
+                                    : 'Currently using dark mode with dark background and light text'
+                            }
+                        </div>
+
                         <div class="form-row">
                             <div class="form-group">
                                 <label class="form-label">

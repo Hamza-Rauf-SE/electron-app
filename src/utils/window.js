@@ -344,6 +344,44 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
         }
     }
 
+    // Register transparency control shortcuts
+    if (keybinds.increaseTransparency) {
+        try {
+            globalShortcut.register(keybinds.increaseTransparency, () => {
+                console.log('Increase transparency shortcut triggered');
+                sendToRenderer('increase-transparency');
+            });
+            console.log(`Registered increaseTransparency: ${keybinds.increaseTransparency}`);
+        } catch (error) {
+            console.error(`Failed to register increaseTransparency (${keybinds.increaseTransparency}):`, error);
+        }
+    }
+
+    if (keybinds.decreaseTransparency) {
+        try {
+            globalShortcut.register(keybinds.decreaseTransparency, () => {
+                console.log('Decrease transparency shortcut triggered');
+                sendToRenderer('decrease-transparency');
+            });
+            console.log(`Registered decreaseTransparency: ${keybinds.decreaseTransparency}`);
+        } catch (error) {
+            console.error(`Failed to register decreaseTransparency (${keybinds.decreaseTransparency}):`, error);
+        }
+    }
+
+    // Register theme toggle shortcut
+    if (keybinds.toggleTheme) {
+        try {
+            globalShortcut.register(keybinds.toggleTheme, () => {
+                console.log('Toggle theme shortcut triggered');
+                sendToRenderer('toggle-theme');
+            });
+            console.log(`Registered toggleTheme: ${keybinds.toggleTheme}`);
+        } catch (error) {
+            console.error(`Failed to register toggleTheme (${keybinds.toggleTheme}):`, error);
+        }
+    }
+
     // Register emergency erase shortcut
     if (keybinds.emergencyErase) {
         try {

@@ -118,6 +118,7 @@ export class CheatingDaddyApp extends LitElement {
         selectedImageQuality: { type: String },
         layoutMode: { type: String },
         advancedMode: { type: Boolean },
+        themeMode: { type: String },
         _viewInstances: { type: Object, state: true },
         _isClickThrough: { state: true },
         _awaitingNewResponse: { state: true },
@@ -138,6 +139,7 @@ export class CheatingDaddyApp extends LitElement {
         this.selectedImageQuality = localStorage.getItem('selectedImageQuality') || 'medium';
         this.layoutMode = localStorage.getItem('layoutMode') || 'normal';
         this.advancedMode = localStorage.getItem('advancedMode') === 'true';
+        this.themeMode = localStorage.getItem('themeMode') || 'dark';
         this.responses = [];
         this.currentResponseIndex = -1;
         this._viewInstances = new Map();
@@ -146,8 +148,9 @@ export class CheatingDaddyApp extends LitElement {
         this._currentResponseIsComplete = true;
         this.shouldAnimateResponse = false;
 
-        // Apply layout mode to document root
+        // Apply layout mode and theme to document root
         this.updateLayoutMode();
+        this.updateThemeMode();
     }
 
     connectedCallback() {
@@ -176,7 +179,46 @@ export class CheatingDaddyApp extends LitElement {
                     this._currentResponseIsComplete
                 );
             });
+            ipcRenderer.on('increase-transparency', () => {
+                this.increaseTransparency();
+            });
+            ipcRenderer.on('decrease-transparency', () => {
+                this.decreaseTransparency();
+            });
+            ipcRenderer.on('toggle-theme', () => {
+                this.toggleTheme();
+            });
         }
+    }
+
+    increaseTransparency() {
+        let currentTransparency = parseFloat(localStorage.getItem('backgroundTransparency') || '0.8');
+        currentTransparency = Math.max(0, currentTransparency - 0.1);
+        localStorage.setItem('backgroundTransparency', currentTransparency.toString());
+        this.updateBackgroundTransparency(currentTransparency);
+        console.log('Transparency increased to:', currentTransparency);
+    }
+
+    decreaseTransparency() {
+        let currentTransparency = parseFloat(localStorage.getItem('backgroundTransparency') || '0.8');
+        currentTransparency = Math.min(1, currentTransparency + 0.1);
+        localStorage.setItem('backgroundTransparency', currentTransparency.toString());
+        this.updateBackgroundTransparency(currentTransparency);
+        console.log('Transparency decreased to:', currentTransparency);
+    }
+
+    updateBackgroundTransparency(transparency) {
+        const root = document.documentElement;
+        root.style.setProperty('--header-background', `rgba(0, 0, 0, ${transparency})`);
+        root.style.setProperty('--main-content-background', `rgba(0, 0, 0, ${transparency})`);
+        root.style.setProperty('--card-background', `rgba(255, 255, 255, ${transparency * 0.05})`);
+        root.style.setProperty('--input-background', `rgba(0, 0, 0, ${transparency * 0.375})`);
+        root.style.setProperty('--input-focus-background', `rgba(0, 0, 0, ${transparency * 0.625})`);
+        root.style.setProperty('--button-background', `rgba(0, 0, 0, ${transparency * 0.625})`);
+        root.style.setProperty('--preview-video-background', `rgba(0, 0, 0, ${transparency * 1.125})`);
+        root.style.setProperty('--screen-option-background', `rgba(0, 0, 0, ${transparency * 0.5})`);
+        root.style.setProperty('--screen-option-hover-background', `rgba(0, 0, 0, ${transparency * 0.75})`);
+        root.style.setProperty('--scrollbar-background', `rgba(0, 0, 0, ${transparency * 0.5})`);
     }
 
     disconnectedCallback() {
@@ -187,6 +229,9 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.removeAllListeners('update-status');
             ipcRenderer.removeAllListeners('click-through-toggled');
             ipcRenderer.removeAllListeners('response-complete');
+            ipcRenderer.removeAllListeners('increase-transparency');
+            ipcRenderer.removeAllListeners('decrease-transparency');
+            ipcRenderer.removeAllListeners('toggle-theme');
         }
     }
 
@@ -261,6 +306,14 @@ export class CheatingDaddyApp extends LitElement {
             this.sessionActive = false;
             this.currentView = 'main';
             console.log('Session closed');
+        } else if (this.currentView === 'chat') {
+            // Close chat view and return to main
+            if (window.require) {
+                const { ipcRenderer } = window.require('electron');
+                await ipcRenderer.invoke('clear-standard-chat-history');
+            }
+            this.currentView = 'main';
+            console.log('Chat closed');
         } else {
             // Quit the entire application
             if (window.require) {
@@ -413,6 +466,9 @@ export class CheatingDaddyApp extends LitElement {
         if (changedProperties.has('advancedMode')) {
             localStorage.setItem('advancedMode', this.advancedMode.toString());
         }
+        if (changedProperties.has('themeMode')) {
+            this.updateThemeMode();
+        }
     }
 
     renderCurrentView() {
@@ -452,6 +508,8 @@ export class CheatingDaddyApp extends LitElement {
                         .onImageQualityChange=${quality => this.handleImageQualityChange(quality)}
                         .onLayoutModeChange=${layoutMode => this.handleLayoutModeChange(layoutMode)}
                         .onAdvancedModeChange=${advancedMode => this.handleAdvancedModeChange(advancedMode)}
+                        .themeMode=${this.themeMode}
+                        .onThemeModeChange=${themeMode => this.handleThemeModeChange(themeMode)}
                     ></customize-view>
                 `;
 
@@ -553,6 +611,31 @@ export class CheatingDaddyApp extends LitElement {
         }
 
         this.requestUpdate();
+    }
+
+    updateThemeMode() {
+        // Apply or remove light mode class to document root
+        if (this.themeMode === 'light') {
+            document.documentElement.classList.add('light-mode');
+        } else {
+            document.documentElement.classList.remove('light-mode');
+        }
+    }
+
+    async handleThemeModeChange(themeMode) {
+        this.themeMode = themeMode;
+        localStorage.setItem('themeMode', themeMode);
+        this.updateThemeMode();
+        this.requestUpdate();
+    }
+
+    toggleTheme() {
+        // Toggle between light and dark mode
+        this.themeMode = this.themeMode === 'light' ? 'dark' : 'light';
+        localStorage.setItem('themeMode', this.themeMode);
+        this.updateThemeMode();
+        this.requestUpdate();
+        console.log('Theme toggled to:', this.themeMode);
     }
 }
 
