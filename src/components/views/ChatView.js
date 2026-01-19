@@ -57,11 +57,11 @@ export class ChatView extends LitElement {
         }
 
         .message-role.user {
-            color: var(--focus-border-color);
+            color: var(--text-color);
         }
 
         .message-role.model {
-            color: #4caf50;
+            color: var(--text-color);
         }
 
         .message-content {
@@ -75,8 +75,8 @@ export class ChatView extends LitElement {
         }
 
         .message-content.user {
-            background: rgba(0, 122, 255, 0.1);
-            border: 1px solid var(--focus-border-color);
+            background: transparent;
+            border: 1px solid transparent;
         }
 
         .message-content.model {
@@ -127,37 +127,44 @@ export class ChatView extends LitElement {
             gap: 8px;
         }
 
-        .preview-image {
-            max-width: 200px;
-            max-height: 200px;
+        .preview-container {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: transparent;
+            border: 1px solid transparent;
             border-radius: 8px;
-            border: 2px solid var(--focus-border-color);
+            color: var(--text-color);
         }
 
-        .preview-container {
-            position: relative;
-            display: inline-block;
+        .screenshot-icon {
+            font-size: 20px;
+        }
+
+        .screenshot-text {
+            font-size: 14px;
+            font-weight: 500;
         }
 
         .remove-preview {
-            position: absolute;
-            top: 4px;
-            right: 4px;
-            background: rgba(0, 0, 0, 0.7);
-            color: white;
+            background: transparent;
+            color: var(--text-color);
             border: none;
             border-radius: 50%;
-            width: 24px;
-            height: 24px;
+            width: 20px;
+            height: 20px;
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 18px;
+            margin-left: 4px;
         }
 
         .remove-preview:hover {
-            background: rgba(255, 0, 0, 0.8);
+            background: transparent;
+            opacity: 0.7;
         }
 
         textarea {
@@ -192,7 +199,7 @@ export class ChatView extends LitElement {
 
         button {
             background: transparent;
-            color: var(--start-button-background);
+            color: var(--text-color);
             border: 1px solid var(--button-border);
             padding: 10px;
             border-radius: 8px;
@@ -204,8 +211,8 @@ export class ChatView extends LitElement {
         }
 
         button:hover:not(:disabled) {
-            background: rgba(255, 255, 255, 0.1);
-            border-color: var(--focus-border-color);
+            background: transparent;
+            border-color: transparent;
         }
 
         button:disabled {
@@ -218,8 +225,8 @@ export class ChatView extends LitElement {
         }
 
         .send-button {
-            background: var(--start-button-background);
-            color: white;
+            background: transparent;
+            color: var(--text-color);
         }
 
         .send-button:hover:not(:disabled) {
@@ -342,6 +349,7 @@ export class ChatView extends LitElement {
         isLoading: { type: Boolean },
         capturedImage: { type: String },
         isChatStarted: { type: Boolean },
+        screenshotCount: { type: Number },
     };
 
     constructor() {
@@ -350,6 +358,7 @@ export class ChatView extends LitElement {
         this.isLoading = false;
         this.capturedImage = null;
         this.isChatStarted = false;
+        this.screenshotCount = 0;
     }
 
     async startChat() {
@@ -378,6 +387,7 @@ export class ChatView extends LitElement {
 
             if (result.success) {
                 this.capturedImage = result.imageData;
+                this.screenshotCount++;
                 // Silent capture - no logs for stealth
             } else {
                 // Show error only in development
@@ -395,6 +405,7 @@ export class ChatView extends LitElement {
 
     removePreview() {
         this.capturedImage = null;
+        this.screenshotCount = 0;
     }
 
     renderMarkdown(content) {
@@ -530,7 +541,8 @@ export class ChatView extends LitElement {
                     ${this.capturedImage
                         ? html`
                               <div class="preview-container">
-                                  <img class="preview-image" src="data:image/png;base64,${this.capturedImage}" alt="Screenshot preview" />
+                                  <span class="screenshot-icon">📷</span>
+                                  <span class="screenshot-text">Screenshot ${this.screenshotCount}</span>
                                   <button class="remove-preview" @click=${this.removePreview}>×</button>
                               </div>
                           `

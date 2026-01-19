@@ -107,7 +107,7 @@ export class MainView extends LitElement {
 
         .chat-button {
             background: transparent;
-            color: var(--start-button-background);
+            color: var(--text-color);
             border: 1px solid var(--button-border);
             padding: 8px 16px;
             border-radius: 8px;
@@ -121,8 +121,8 @@ export class MainView extends LitElement {
         }
 
         .chat-button:hover {
-            background: rgba(255, 255, 255, 0.1);
-            border-color: var(--focus-border-color);
+            background: transparent;
+            border-color: transparent;
         }
 
         .shortcut-icons {

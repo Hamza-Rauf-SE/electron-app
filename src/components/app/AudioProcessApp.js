@@ -119,6 +119,7 @@ export class AudioProcessApp extends LitElement {
         layoutMode: { type: String },
         advancedMode: { type: Boolean },
         themeMode: { type: String },
+        textOpacity: { type: Number },
         _viewInstances: { type: Object, state: true },
         _isClickThrough: { state: true },
         _awaitingNewResponse: { state: true },
@@ -140,6 +141,7 @@ export class AudioProcessApp extends LitElement {
         this.layoutMode = localStorage.getItem('layoutMode') || 'normal';
         this.advancedMode = localStorage.getItem('advancedMode') === 'true';
         this.themeMode = localStorage.getItem('themeMode') || 'dark';
+        this.textOpacity = parseFloat(localStorage.getItem('textOpacity')) || 1.0;
         this.responses = [];
         this.currentResponseIndex = -1;
         this._viewInstances = new Map();
@@ -148,9 +150,10 @@ export class AudioProcessApp extends LitElement {
         this._currentResponseIsComplete = true;
         this.shouldAnimateResponse = false;
 
-        // Apply layout mode and theme to document root
+        // Apply layout mode, theme, and text opacity to document root
         this.updateLayoutMode();
         this.updateThemeMode();
+        this.updateTextOpacity();
     }
 
     connectedCallback() {
@@ -188,6 +191,12 @@ export class AudioProcessApp extends LitElement {
             ipcRenderer.on('toggle-theme', () => {
                 this.toggleTheme();
             });
+            ipcRenderer.on('increase-text-opacity', () => {
+                this.increaseTextOpacity();
+            });
+            ipcRenderer.on('decrease-text-opacity', () => {
+                this.decreaseTextOpacity();
+            });
         }
     }
 
@@ -221,6 +230,27 @@ export class AudioProcessApp extends LitElement {
         root.style.setProperty('--scrollbar-background', `rgba(0, 0, 0, ${transparency * 0.5})`);
     }
 
+    increaseTextOpacity() {
+        this.textOpacity = Math.min(1, this.textOpacity + 0.1);
+        this.textOpacity = Math.round(this.textOpacity * 10) / 10; // Round to 1 decimal place
+        localStorage.setItem('textOpacity', this.textOpacity.toString());
+        this.updateTextOpacity();
+        console.log('Text opacity increased to:', this.textOpacity);
+    }
+
+    decreaseTextOpacity() {
+        this.textOpacity = Math.max(0, this.textOpacity - 0.1);
+        this.textOpacity = Math.round(this.textOpacity * 10) / 10; // Round to 1 decimal place
+        localStorage.setItem('textOpacity', this.textOpacity.toString());
+        this.updateTextOpacity();
+        console.log('Text opacity decreased to:', this.textOpacity);
+    }
+
+    updateTextOpacity() {
+        const root = document.documentElement;
+        root.style.setProperty('--text-opacity', this.textOpacity.toString());
+    }
+
     disconnectedCallback() {
         super.disconnectedCallback();
         if (window.require) {
@@ -232,6 +262,8 @@ export class AudioProcessApp extends LitElement {
             ipcRenderer.removeAllListeners('increase-transparency');
             ipcRenderer.removeAllListeners('decrease-transparency');
             ipcRenderer.removeAllListeners('toggle-theme');
+            ipcRenderer.removeAllListeners('increase-text-opacity');
+            ipcRenderer.removeAllListeners('decrease-text-opacity');
         }
     }
 

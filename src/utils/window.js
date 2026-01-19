@@ -382,6 +382,32 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
         }
     }
 
+    // Register increase text opacity shortcut
+    if (keybinds.increaseTextOpacity) {
+        try {
+            globalShortcut.register(keybinds.increaseTextOpacity, () => {
+                console.log('Increase text opacity shortcut triggered');
+                sendToRenderer('increase-text-opacity');
+            });
+            console.log(`Registered increaseTextOpacity: ${keybinds.increaseTextOpacity}`);
+        } catch (error) {
+            console.error(`Failed to register increaseTextOpacity (${keybinds.increaseTextOpacity}):`, error);
+        }
+    }
+
+    // Register decrease text opacity shortcut
+    if (keybinds.decreaseTextOpacity) {
+        try {
+            globalShortcut.register(keybinds.decreaseTextOpacity, () => {
+                console.log('Decrease text opacity shortcut triggered');
+                sendToRenderer('decrease-text-opacity');
+            });
+            console.log(`Registered decreaseTextOpacity: ${keybinds.decreaseTextOpacity}`);
+        } catch (error) {
+            console.error(`Failed to register decreaseTextOpacity (${keybinds.decreaseTextOpacity}):`, error);
+        }
+    }
+
     // Register emergency erase shortcut
     if (keybinds.emergencyErase) {
         try {
@@ -559,6 +585,10 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
             switch (viewName) {
                 case 'customize':
                 case 'settings':
+                    targetWidth = baseWidth;
+                    targetHeight = layoutMode === 'compact' ? 700 : 800;
+                    break;
+                case 'chat':
                     targetWidth = baseWidth;
                     targetHeight = layoutMode === 'compact' ? 700 : 800;
                     break;

@@ -18,6 +18,26 @@ export class CustomizeView extends LitElement {
             padding: 12px;
             margin: 0 auto;
             max-width: 700px;
+
+            /* Overrides for transparency and black text */
+            --text-color: #000000;
+            --label-color: #000000;
+            --description-color: rgba(0, 0, 0, 0.7);
+            --card-background: transparent;
+            --card-border: rgba(0, 0, 0, 0.1);
+            --input-background: rgba(0, 0, 0, 0.05);
+            --input-border: rgba(0, 0, 0, 0.2);
+            --input-focus-background: rgba(0, 0, 0, 0.1);
+            --button-background: rgba(0, 0, 0, 0.1);
+            --placeholder-color: rgba(0, 0, 0, 0.4);
+            --note-color: rgba(0, 0, 0, 0.6);
+            --note-background: rgba(0, 0, 0, 0.05);
+            --note-border: rgba(0, 0, 0, 0.1);
+            --checkbox-background: rgba(0, 0, 0, 0.05);
+            --checkbox-border: rgba(0, 0, 0, 0.1);
+            --table-header-background: rgba(0, 0, 0, 0.05);
+            --table-border: rgba(0, 0, 0, 0.1);
+            --table-row-hover: rgba(0, 0, 0, 0.03);
         }
 
         .settings-container {
@@ -27,11 +47,10 @@ export class CustomizeView extends LitElement {
         }
 
         .settings-section {
-            background: var(--card-background, rgba(255, 255, 255, 0.04));
-            border: 1px solid var(--card-border, rgba(255, 255, 255, 0.1));
+            background: transparent;
+            border: 1px solid var(--card-border, rgba(0, 0, 0, 0.1));
             border-radius: 6px;
             padding: 16px;
-            backdrop-filter: blur(10px);
         }
 
         .section-title {
@@ -665,6 +684,8 @@ export class CustomizeView extends LitElement {
             increaseTransparency: isMac ? 'Cmd+Shift+I' : 'Ctrl+Shift+I',
             decreaseTransparency: isMac ? 'Cmd+Shift+D' : 'Ctrl+Shift+D',
             toggleTheme: isMac ? 'Cmd+Shift+T' : 'Ctrl+Shift+T',
+            increaseTextOpacity: isMac ? 'Cmd+Shift+B' : 'Ctrl+Shift+B',
+            decreaseTextOpacity: isMac ? 'Cmd+Shift+A' : 'Ctrl+Shift+A',
         };
     }
 
@@ -684,6 +705,8 @@ export class CustomizeView extends LitElement {
                     increaseTransparency: isMac ? 'Cmd+I' : 'Ctrl+I',
                     decreaseTransparency: isMac ? 'Cmd+D' : 'Ctrl+D',
                     toggleTheme: isMac ? 'Cmd+T' : 'Ctrl+T',
+                    increaseTextOpacity: isMac ? 'Cmd+Shift+=' : 'Ctrl+Shift+=',
+                    decreaseTextOpacity: isMac ? 'Cmd+Shift+-' : 'Ctrl+Shift+-',
                 };
 
                 // If the saved value matches the old default, update to new default
@@ -805,6 +828,16 @@ export class CustomizeView extends LitElement {
                 key: 'toggleTheme',
                 name: 'Toggle Theme',
                 description: 'Toggle between light mode and dark mode',
+            },
+            {
+                key: 'increaseTextOpacity',
+                name: 'Increase Text Opacity',
+                description: 'Make text more visible (increase opacity)',
+            },
+            {
+                key: 'decreaseTextOpacity',
+                name: 'Decrease Text Opacity',
+                description: 'Make text more transparent (decrease opacity)',
             },
         ];
     }
