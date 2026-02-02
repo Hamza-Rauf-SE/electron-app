@@ -23,6 +23,7 @@ export class AppHeader extends LitElement {
             font-size: var(--header-font-size);
             font-weight: 600;
             -webkit-app-region: drag;
+            display: none;
         }
 
         .header-actions {

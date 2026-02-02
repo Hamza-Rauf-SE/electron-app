@@ -621,9 +621,19 @@ async function sendStandardChatMessage(message, imageData = null) {
             parts.push({ text: message.trim() });
         }
 
-        // Use the correct API for @google/genai
+        // Configure tools and thinking for gemini-2.5-pro
+        const tools = [{ googleSearch: {} }];
+        const config = {
+            thinkingConfig: {
+                thinkingBudget: -1, // Unlimited thinking
+            },
+            tools: tools,
+        };
+
+        // Use gemini-2.5-pro with proper configuration
         const result = await standardChatClient.models.generateContent({
-            model: 'gemini-2.0-flash-exp',
+            model: 'gemini-2.5-pro',
+            config: config,
             contents: [
                 {
                     role: 'user',

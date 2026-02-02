@@ -44,7 +44,7 @@ export class ChatView extends LitElement {
         }
 
         .message-header {
-            display: flex;
+            display: none;
             align-items: center;
             gap: 8px;
             font-size: 12px;
@@ -485,12 +485,10 @@ export class ChatView extends LitElement {
     }
 
     async clearChat() {
-        if (confirm('Are you sure you want to clear the chat history?')) {
-            const { ipcRenderer } = window.require('electron');
-            await ipcRenderer.invoke('clear-standard-chat-history');
-            this.chatHistory = [];
-            this.capturedImage = null;
-        }
+        const { ipcRenderer } = window.require('electron');
+        await ipcRenderer.invoke('clear-standard-chat-history');
+        this.chatHistory = [];
+        this.capturedImage = null;
     }
 
     formatTimestamp(timestamp) {
