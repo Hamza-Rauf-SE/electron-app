@@ -2,6 +2,7 @@ const { GoogleGenAI } = require('@google/genai');
 const { BrowserWindow, ipcMain } = require('electron');
 const { spawn, exec } = require('child_process');
 const fs = require('fs');
+const path = require('path');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
 
@@ -584,6 +585,30 @@ async function sendAudioToGemini(base64Data, geminiSessionRef) {
 let standardChatClient = null;
 let standardChatHistory = [];
 
+// Load DET prompt for chat
+function loadDETPrompt() {
+    try {
+        const { app } = require('electron');
+        let promptPath;
+
+        if (app.isPackaged) {
+            promptPath = path.join(process.resourcesPath, 'prompts', 'det_prompt.txt');
+        } else {
+            promptPath = path.join(__dirname, '../../prompts/det_prompt.txt');
+        }
+
+        if (fs.existsSync(promptPath)) {
+            return fs.readFileSync(promptPath, 'utf8');
+        } else {
+            console.warn('DET prompt file not found at:', promptPath);
+            return 'You are a helpful AI assistant for Duolingo English Test preparation.';
+        }
+    } catch (error) {
+        console.error('Error loading DET prompt:', error);
+        return 'You are a helpful AI assistant for Duolingo English Test preparation.';
+    }
+}
+
 async function initializeStandardChat(apiKey) {
     try {
         standardChatClient = new GoogleGenAI({
@@ -621,6 +646,9 @@ async function sendStandardChatMessage(message, imageData = null) {
             parts.push({ text: message.trim() });
         }
 
+        // Load DET prompt for system instruction
+        const detPrompt = loadDETPrompt();
+
         // Configure tools and thinking for gemini-2.5-pro
         const tools = [{ googleSearch: {} }];
         const config = {
@@ -628,6 +656,9 @@ async function sendStandardChatMessage(message, imageData = null) {
                 thinkingBudget: -1, // Unlimited thinking
             },
             tools: tools,
+            systemInstruction: {
+                parts: [{ text: detPrompt }],
+            },
         };
 
         // Use gemini-2.5-pro with proper configuration
