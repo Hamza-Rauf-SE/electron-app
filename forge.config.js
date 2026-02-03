@@ -4,7 +4,7 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 module.exports = {
     packagerConfig: {
         asar: true,
-        extraResource: ['./src/assets/SystemAudioDump'],
+        extraResource: ['./src/assets/SystemAudioDump', './prompts'],
         name: 'Cheating Daddy',
         icon: 'src/assets/logo',
         // use `security find-identity -v -p codesigning` to find your identity
@@ -51,8 +51,8 @@ module.exports = {
                     genericName: 'AI Assistant',
                     description: 'AI assistant for interviews and learning',
                     categories: ['Development', 'Education'],
-                    icon: 'src/assets/logo.png'
-                }
+                    icon: 'src/assets/logo.png',
+                },
             },
         },
     ],

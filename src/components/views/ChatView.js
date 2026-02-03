@@ -16,10 +16,10 @@ export class ChatView extends LitElement {
         .chat-container {
             flex: 1;
             overflow-y: auto;
-            padding: 16px;
+            padding: 10px;
             display: flex;
             flex-direction: column;
-            gap: 16px;
+            gap: 6px;
             background: var(--main-content-background);
             border-radius: 10px;
             margin-bottom: 10px;
@@ -28,7 +28,7 @@ export class ChatView extends LitElement {
         .chat-message {
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 6px;
             animation: fadeIn 0.3s ease-in;
         }
 
@@ -66,10 +66,11 @@ export class ChatView extends LitElement {
 
         .message-content {
             background: var(--input-background);
-            padding: 12px 16px;
+            padding: 6px 10px;
             border-radius: 8px;
             color: var(--text-color);
-            line-height: 1.6;
+            font-size: 12px;
+            line-height: 1.0;
             user-select: text;
             cursor: text;
         }
@@ -194,20 +195,25 @@ export class ChatView extends LitElement {
         .button-group {
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 4px;
         }
 
         button {
             background: transparent;
             color: var(--text-color);
             border: 1px solid var(--button-border);
-            padding: 10px;
+            padding: 6px;
             border-radius: 8px;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
             transition: all 0.2s ease;
+        }
+
+        button svg {
+            width: 16px;
+            height: 16px;
         }
 
         button:hover:not(:disabled) {
@@ -218,10 +224,6 @@ export class ChatView extends LitElement {
         button:disabled {
             opacity: 0.5;
             cursor: not-allowed;
-        }
-
-        button svg {
-            stroke: currentColor !important;
         }
 
         .send-button {
@@ -403,6 +405,51 @@ export class ChatView extends LitElement {
         }
     }
 
+    async quickScreenshotAndSend() {
+        try {
+            if (!this.isChatStarted) {
+                await this.startChat();
+            }
+
+            this.isLoading = true;
+
+            const { ipcRenderer } = window.require('electron');
+
+            // Capture screenshot
+            const captureResult = await ipcRenderer.invoke('capture-screenshot-for-chat');
+
+            if (!captureResult.success) {
+                if (process.env.NODE_ENV === 'development') {
+                    alert('Failed to capture screenshot: ' + captureResult.error);
+                }
+                this.isLoading = false;
+                return;
+            }
+
+            // Send immediately with default message
+            const result = await ipcRenderer.invoke('send-standard-chat-message', {
+                message: 'Analyze this screenshot',
+                imageData: captureResult.imageData,
+            });
+
+            if (result.success) {
+                // Fetch updated history
+                const historyResult = await ipcRenderer.invoke('get-standard-chat-history');
+                if (historyResult.success) {
+                    this.chatHistory = historyResult.history;
+                    this.scrollToBottom();
+                }
+            } else {
+                alert('Failed to send message: ' + result.error);
+            }
+        } catch (error) {
+            console.error('Error in quick screenshot and send:', error);
+            alert('Error: ' + error.message);
+        } finally {
+            this.isLoading = false;
+        }
+    }
+
     removePreview() {
         this.capturedImage = null;
         this.screenshotCount = 0;
@@ -454,9 +501,10 @@ export class ChatView extends LitElement {
                     this.scrollToBottom();
                 }
 
-                // Clear input and image
+                // Clear input, image, and counter
                 if (textarea) textarea.value = '';
                 this.capturedImage = null;
+                this.screenshotCount = 0;
             } else {
                 alert('Failed to send message: ' + result.error);
             }
@@ -489,6 +537,7 @@ export class ChatView extends LitElement {
         await ipcRenderer.invoke('clear-standard-chat-history');
         this.chatHistory = [];
         this.capturedImage = null;
+        this.screenshotCount = 0;
     }
 
     formatTimestamp(timestamp) {
@@ -564,6 +613,18 @@ export class ChatView extends LitElement {
                             ></path>
                             <path
                                 d="M9 12C9 13.6569 10.3431 15 12 15C13.6569 15 15 13.6569 15 12C15 10.3431 13.6569 9 12 9C10.3431 9 9 10.3431 9 12Z"
+                                stroke="currentColor"
+                                stroke-width="1.7"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            ></path>
+                        </svg>
+                    </button>
+
+                    <button @click=${this.quickScreenshotAndSend} ?disabled=${this.isLoading} title="Quick Screenshot & Send">
+                        <svg width="20px" height="20px" stroke-width="1.7" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path
+                                d="M13 2L3 14H12L11 22L21 10H12L13 2Z"
                                 stroke="currentColor"
                                 stroke-width="1.7"
                                 stroke-linecap="round"
