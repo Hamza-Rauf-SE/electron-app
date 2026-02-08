@@ -686,6 +686,7 @@ export class CustomizeView extends LitElement {
             toggleTheme: isMac ? 'Cmd+Shift+T' : 'Ctrl+Shift+T',
             increaseTextOpacity: isMac ? 'Cmd+Shift+B' : 'Ctrl+Shift+B',
             decreaseTextOpacity: isMac ? 'Cmd+Shift+A' : 'Ctrl+Shift+A',
+            quickScreenshotAndSend: isMac ? 'Cmd+J' : 'Ctrl+J',
         };
     }
 
@@ -793,6 +794,11 @@ export class CustomizeView extends LitElement {
                 key: 'nextStep',
                 name: 'Ask Next Step',
                 description: 'Take screenshot and ask AI for the next step suggestion',
+            },
+            {
+                key: 'quickScreenshotAndSend',
+                name: 'Quick Screenshot & Send',
+                description: 'Take a screenshot and send it to the chat model',
             },
             {
                 key: 'previousResponse',

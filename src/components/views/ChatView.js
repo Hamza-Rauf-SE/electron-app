@@ -363,6 +363,25 @@ export class ChatView extends LitElement {
         this.screenshotCount = 0;
     }
 
+    connectedCallback() {
+        super.connectedCallback();
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            this.handleQuickScreenshot = () => this.quickScreenshotAndSend();
+            ipcRenderer.on('quick-screenshot-and-send', this.handleQuickScreenshot);
+        }
+    }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            if (this.handleQuickScreenshot) {
+                ipcRenderer.removeListener('quick-screenshot-and-send', this.handleQuickScreenshot);
+            }
+        }
+    }
+
     async startChat() {
         const apiKey = localStorage.getItem('apiKey')?.trim();
         if (!apiKey) {

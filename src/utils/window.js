@@ -182,6 +182,7 @@ function getDefaultKeybinds() {
         scrollUp: isMac ? 'Cmd+Shift+Up' : 'Ctrl+Shift+Up',
         scrollDown: isMac ? 'Cmd+Shift+Down' : 'Ctrl+Shift+Down',
         emergencyErase: isMac ? 'Cmd+Shift+E' : 'Ctrl+Shift+E',
+        quickScreenshotAndSend: isMac ? 'Cmd+J' : 'Ctrl+J',
     };
 }
 
@@ -341,6 +342,19 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
             console.log(`Registered scrollDown: ${keybinds.scrollDown}`);
         } catch (error) {
             console.error(`Failed to register scrollDown (${keybinds.scrollDown}):`, error);
+        }
+    }
+
+    // Register quick screenshot and send shortcut
+    if (keybinds.quickScreenshotAndSend) {
+        try {
+            globalShortcut.register(keybinds.quickScreenshotAndSend, () => {
+                console.log('Quick screenshot and send shortcut triggered');
+                sendToRenderer('quick-screenshot-and-send');
+            });
+            console.log(`Registered quickScreenshotAndSend: ${keybinds.quickScreenshotAndSend}`);
+        } catch (error) {
+            console.error(`Failed to register quickScreenshotAndSend (${keybinds.quickScreenshotAndSend}):`, error);
         }
     }
 
