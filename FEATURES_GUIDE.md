@@ -523,23 +523,66 @@ Savings: 95%+ 🎉
 
 ---
 
+---
+
+## 🧠 Feature 3: OpenAI Realtime Session
+
+The OpenAI Realtime Session offers a powerful alternative for live assistance, leveraging OpenAI's latest real-time and reasoning models. It is particularly effective for complex technical tasks and coding scenarios.
+
+### What It Does
+
+**OpenAI Realtime Session provides:**
+
+-   🎧 Continuous dual-stream audio capture (System + Mic)
+-   ⚡ Low-latency WebSocket connection
+-   📸 Advanced screenshot analysis using **GPT-5.1 Codex Max**
+-   💬 Instant text responses (non-streaming)
+-   🧠 Specialized capabilities for code and technical analysis
+
+### Technology Stack
+
+| Component           | Technology                                                         |
+| ------------------- | ------------------------------------------------------------------ |
+| **API**             | OpenAI Realtime API (WebSocket)                                    |
+| **Conversation Model**| `gpt-realtime`                                                   |
+| **Screenshot Model**| `gpt-5.1-codex-max`                                                |
+| **Connection**      | Persistent WebSocket                                               |
+| **Audio Format**    | PCM 24kHz mono                                                     |
+
+### Key Features
+
+#### 1. **Advanced Screenshot Analysis**
+Screenshots in this mode are processed by `gpt-5.1-codex-max`, a model highly optimized for:
+-   Code review and debugging
+-   Extracting text and data structures
+-   Analyzing complex UI elements
+-   Technical documentation reading
+
+#### 2. **Instant "Direct" Display**
+Responses in OpenAI mode are displayed instantly upon completion rather than streaming word-by-word, allowing for quicker reading of complete thoughts and code blocks.
+
+#### 3. **Seamless Audio Integration**
+Uses the same robust `SystemAudioDump` (macOS) architecture to capture meeting audio and interviews with high fidelity, resampled specifically for OpenAI's 24kHz requirement.
+
+---
+
 ## 🔄 Feature Comparison
 
-| Feature            | Realtime Session       | Chat Mode              |
-| ------------------ | ---------------------- | ---------------------- |
-| **Connection**     | WebSocket (persistent) | REST API (per message) |
-| **Audio Capture**  | ✅ Continuous          | ❌ No audio            |
-| **Text Input**     | ✅ During session      | ✅ Primary input       |
-| **Screenshot**     | ✅ Manual (shortcut)   | ✅ Manual (button)     |
-| **Speaker Labels** | ✅ Yes (diarization)   | ❌ N/A                 |
-| **Google Search**  | ✅ Real-time           | ❌ No                  |
-| **Response Speed** | ⚡ Instant             | ⚡ 2-5 seconds         |
-| **Cost (1 hour)**  | ~115K tokens           | ~5K tokens             |
-| **Best For**       | Live conversations     | Quick questions        |
-| **Stealth Level**  | Medium                 | Maximum                |
-| **History**        | ✅ Saved automatically | ✅ In-memory           |
-| **Profiles**       | ✅ 6 profiles          | ❌ No profiles         |
-| **Reconnection**   | ✅ Auto (3 attempts)   | ❌ Not needed          |
+| Feature            | Gemini Session         | OpenAI Session         | Chat Mode              |
+| ------------------ | ---------------------- | ---------------------- | ---------------------- |
+| **Connection**     | WebSocket (persistent) | WebSocket (persistent) | REST API (per message) |
+| **Audio Capture**  | ✅ Continuous          | ✅ Continuous          | ❌ No audio            |
+| **Text Input**     | ✅ During session      | ✅ During session      | ✅ Primary input       |
+| **Screenshot**     | ✅ Manual (shortcut)   | ✅ Manual (Codex)      | ✅ Manual (button)     |
+| **Speaker Labels** | ✅ Yes (diarization)   | ✅ Server VAD          | ❌ N/A                 |
+| **Google Search**  | ✅ Real-time           | ❌ No                  | ❌ No                  |
+| **Response Speed** | ⚡ Instant (Stream)    | ⚡ Instant (Direct)    | ⚡ 2-5 seconds         |
+| **Cost (1 hour)**  | ~115K tokens           | ~100K tokens           | ~5K tokens             |
+| **Best For**       | Live conversations     | Coding / Technical     | Quick questions        |
+| **Stealth Level**  | Medium                 | Medium                 | Maximum                |
+| **History**        | ✅ Saved automatically | ✅ Saved automatically | ✅ In-memory           |
+| **Profiles**       | ✅ 6 profiles          | ✅ 6 profiles          | ❌ No profiles         |
+| **Reconnection**   | ✅ Auto (3 attempts)   | ✅ Auto                | ❌ Not needed          |
 
 ---
 
@@ -733,7 +776,8 @@ A: No, both modes require internet connection to Gemini API.
 
 ## 🎉 Summary
 
-**Realtime Session** = Live AI assistant for conversations (audio + text + screenshots)
+**Gemini Realtime Session** = Live AI assistant for conversations (audio + text + screenshots)
+**OpenAI Realtime Session** = Specialized live assistant for coding & technical tasks (audio + text + Codex screenshots)
 **Chat Mode** = Quick Q&A with visual context (text + screenshots)
 
-Both modes use cutting-edge Gemini 2.0 technology to provide intelligent, context-aware assistance when you need it most!
+These modes use cutting-edge AI technology to provide intelligent, context-aware assistance when you need it most!
