@@ -241,16 +241,27 @@ export class AudioProcessApp extends LitElement {
         // because we now rely on explicit 'response-complete' events
     }
 
-    setResponse(response) {
-        const preview = response.substring(0, 50).replace(/\n/g, ' ');
+    setResponse(responsePayload) {
+        let responseText = responsePayload;
+        let shouldAnimate = true;
+
+        // Check if response is an object with text and animate properties
+        if (typeof responsePayload === 'object' && responsePayload !== null && responsePayload.text !== undefined) {
+            responseText = responsePayload.text;
+            if (responsePayload.animate !== undefined) {
+                shouldAnimate = responsePayload.animate;
+            }
+        }
+
+        const preview = responseText.substring(0, 50).replace(/\n/g, ' ');
         console.log(
             '[setResponse] Called with:',
-            preview + '... (len=' + response.length + ') awaiting=' + this._awaitingNewResponse + ' complete=' + this._currentResponseIsComplete
+            preview + '... (len=' + responseText.length + ') awaiting=' + this._awaitingNewResponse + ' complete=' + this._currentResponseIsComplete + ' animate=' + shouldAnimate
         );
 
         if (this._awaitingNewResponse || this.responses.length === 0) {
             // Always add as new response when explicitly waiting for one or if no responses exist
-            this.responses = [...this.responses, response];
+            this.responses = [...this.responses, responseText];
             this.currentResponseIndex = this.responses.length - 1;
             this._awaitingNewResponse = false;
             this._currentResponseIsComplete = false;
@@ -258,16 +269,16 @@ export class AudioProcessApp extends LitElement {
         } else if (!this._currentResponseIsComplete && this.responses.length > 0) {
             // Update the last response (streaming behavior)
             // Only update if the current response is not marked as complete
-            this.responses = [...this.responses.slice(0, this.responses.length - 1), response];
+            this.responses = [...this.responses.slice(0, this.responses.length - 1), responseText];
             console.log('[setResponse] → UPDATED existing response #' + this.responses.length);
         } else {
             // When current response is complete, add as new
-            this.responses = [...this.responses, response];
+            this.responses = [...this.responses, responseText];
             this.currentResponseIndex = this.responses.length - 1;
             this._currentResponseIsComplete = false;
             console.log('[setResponse] → ADDED NEW (complete was true) #' + this.responses.length);
         }
-        this.shouldAnimateResponse = true;
+        this.shouldAnimateResponse = shouldAnimate;
         this.requestUpdate();
     }
 
@@ -298,10 +309,12 @@ export class AudioProcessApp extends LitElement {
         } else if (this.currentView === 'assistant') {
             audioprocess.stopCapture();
 
-            // Close the session
+            // Close the session (check which type)
             if (window.require) {
                 const { ipcRenderer } = window.require('electron');
-                await ipcRenderer.invoke('close-session');
+                // Try to close both session types (only one will be active)
+                await ipcRenderer.invoke('close-session').catch(() => {});
+                await ipcRenderer.invoke('close-openai-session').catch(() => {});
             }
             this.sessionActive = false;
             this.currentView = 'main';
@@ -355,6 +368,30 @@ export class AudioProcessApp extends LitElement {
         console.log('[handleStart] Session started - flags reset');
     }
 
+    async handleStartOpenAI() {
+        // check if api key is empty do nothing
+        const apiKey = localStorage.getItem('openaiApiKey')?.trim();
+        if (!apiKey || apiKey === '') {
+            // Trigger the red blink animation on the API key input
+            const mainView = this.shadowRoot.querySelector('main-view');
+            if (mainView && mainView.triggerOpenAIApiKeyError) {
+                mainView.triggerOpenAIApiKeyError();
+            }
+            return;
+        }
+
+        await audioprocess.initializeOpenAI(this.selectedProfile, this.selectedLanguage);
+        // Pass the screenshot interval as string (including 'manual' option)
+        audioprocess.startCapture(this.selectedScreenshotInterval, this.selectedImageQuality, 'openai');
+        this.responses = [];
+        this.currentResponseIndex = -1;
+        this._awaitingNewResponse = false;
+        this._currentResponseIsComplete = false;
+        this.startTime = Date.now();
+        this.currentView = 'assistant';
+        console.log('[handleStartOpenAI] OpenAI session started - flags reset');
+    }
+
     async handleAPIKeyHelp() {
         if (window.require) {
             const { ipcRenderer } = window.require('electron');
@@ -404,7 +441,12 @@ export class AudioProcessApp extends LitElement {
 
     // Assistant view event handlers
     async handleSendText(message) {
-        const result = await window.audioprocess.sendTextMessage(message);
+        // Determine which provider to use based on which session is active
+        // For now, try OpenAI first, then fall back to Gemini
+        let result = await window.audioprocess.sendTextMessageOpenAI(message).catch(() => null);
+        if (!result || !result.success) {
+            result = await window.audioprocess.sendTextMessage(message);
+        }
 
         if (!result.success) {
             console.error('Failed to send message:', result.error);
@@ -486,6 +528,7 @@ export class AudioProcessApp extends LitElement {
                     <main-view
                         .onStart=${() => this.handleStart()}
                         .onStartChat=${() => this.handleStartChat()}
+                        .onStartOpenAI=${() => this.handleStartOpenAI()}
                         .onAPIKeyHelp=${() => this.handleAPIKeyHelp()}
                         .onLayoutModeChange=${layoutMode => this.handleLayoutModeChange(layoutMode)}
                     ></main-view>

@@ -22,6 +22,7 @@ let audioContext = null;
 let audioProcessor = null;
 let micAudioProcessor = null;
 let audioBuffer = [];
+let currentProvider = 'gemini'; // Track which provider is active
 const SAMPLE_RATE = 24000;
 const AUDIO_CHUNK_DURATION = 0.1; // seconds
 const BUFFER_SIZE = 4096; // Increased buffer size for smoother audio
@@ -161,6 +162,18 @@ async function initializeGemini(profile = 'interview', language = 'en-US') {
     }
 }
 
+async function initializeOpenAI(profile = 'interview', language = 'en-US') {
+    const apiKey = localStorage.getItem('openaiApiKey')?.trim();
+    if (apiKey) {
+        const success = await ipcRenderer.invoke('initialize-openai', apiKey, localStorage.getItem('customPrompt') || '', profile, language);
+        if (success) {
+            audioprocess.setStatus('OpenAI Live');
+        } else {
+            audioprocess.setStatus('error');
+        }
+    }
+}
+
 // Listen for status updates
 ipcRenderer.on('update-status', (event, status) => {
     console.log('Status update:', status);
@@ -174,9 +187,10 @@ ipcRenderer.on('update-status', (event, status) => {
 //     // You can add UI elements to display the response if needed
 // });
 
-async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'medium') {
+async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'medium', provider = 'gemini') {
     // Store the image quality for manual screenshots
     currentImageQuality = imageQuality;
+    currentProvider = provider; // Track which provider is active
 
     // Reset token tracker when starting new capture session
     tokenTracker.reset();
@@ -189,8 +203,9 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             // On macOS, use SystemAudioDump for audio and getDisplayMedia for screen
             console.log('Starting macOS capture with SystemAudioDump...');
 
-            // Start macOS audio capture
-            const audioResult = await ipcRenderer.invoke('start-macos-audio');
+            // Start macOS audio capture (use provider-specific handler)
+            const audioHandler = provider === 'openai' ? 'start-macos-audio-openai' : 'start-macos-audio';
+            const audioResult = await ipcRenderer.invoke(audioHandler);
             if (!audioResult.success) {
                 throw new Error('Failed to start macOS audio capture: ' + audioResult.error);
             }
@@ -366,7 +381,8 @@ function setupLinuxMicProcessing(micStream) {
             const pcmData16 = convertFloat32ToInt16(chunk);
             const base64Data = arrayBufferToBase64(pcmData16.buffer);
 
-            await ipcRenderer.invoke('send-mic-audio-content', {
+            const micHandler = currentProvider === 'openai' ? 'send-mic-audio-content-openai' : 'send-mic-audio-content';
+            await ipcRenderer.invoke(micHandler, {
                 data: base64Data,
                 mimeType: 'audio/pcm;rate=24000',
             });
@@ -399,7 +415,8 @@ function setupLinuxSystemAudioProcessing() {
             const pcmData16 = convertFloat32ToInt16(chunk);
             const base64Data = arrayBufferToBase64(pcmData16.buffer);
 
-            await ipcRenderer.invoke('send-audio-content', {
+            const audioHandler = currentProvider === 'openai' ? 'send-audio-content-openai' : 'send-audio-content';
+            await ipcRenderer.invoke(audioHandler, {
                 data: base64Data,
                 mimeType: 'audio/pcm;rate=24000',
             });
@@ -429,7 +446,8 @@ function setupWindowsLoopbackProcessing() {
             const pcmData16 = convertFloat32ToInt16(chunk);
             const base64Data = arrayBufferToBase64(pcmData16.buffer);
 
-            await ipcRenderer.invoke('send-audio-content', {
+            const audioHandler = currentProvider === 'openai' ? 'send-audio-content-openai' : 'send-audio-content';
+            await ipcRenderer.invoke(audioHandler, {
                 data: base64Data,
                 mimeType: 'audio/pcm;rate=24000',
             });
@@ -447,8 +465,12 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
         return;
     }
 
-    console.log('Capturing manual screenshot...');
-    if (!mediaStream) return;
+    console.log('[DEBUG] Capturing manual screenshot...');
+    if (!mediaStream) {
+        console.error('[DEBUG] No mediaStream available for screenshot');
+        return;
+    }
+    console.log('[DEBUG] MediaStream available, proceeding with capture');
 
     // Lazy init of video element
     if (!hiddenVideo) {
@@ -507,9 +529,10 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
     offscreenCanvas.toBlob(
         async blob => {
             if (!blob) {
-                console.error('Failed to create blob from canvas');
+                console.error('[DEBUG] Failed to create blob from canvas');
                 return;
             }
+            console.log('[DEBUG] Screenshot blob created, size:', blob.size, 'bytes');
 
             const reader = new FileReader();
             reader.onloadend = async () => {
@@ -517,21 +540,48 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
 
                 // Validate base64 data
                 if (!base64data || base64data.length < 100) {
-                    console.error('Invalid base64 data generated');
+                    console.error('[DEBUG] Invalid base64 data generated, length:', base64data?.length);
                     return;
                 }
+                console.log('[DEBUG] Base64 data generated, length:', base64data.length);
 
-                const result = await ipcRenderer.invoke('send-image-content', {
+                // Route to appropriate handler based on current provider
+                // For OpenAI, we'll handle the prompt separately in the handler
+                const imageHandler = currentProvider === 'openai' ? 'send-image-content-openai' : 'send-image-content';
+                console.log('[DEBUG] Using image handler:', imageHandler, 'for provider:', currentProvider);
+                
+                // Get the prompt from the text input if available (for OpenAI Codex)
+                let prompt = null;
+                if (currentProvider === 'openai') {
+                    // Try to get prompt from the app element's text input
+                    try {
+                        const appElement = getAppElement();
+                        if (appElement) {
+                            const textInput = appElement.shadowRoot?.querySelector('#textInput');
+                            prompt = textInput?.value?.trim() || 'Analyze this screenshot in detail. Describe what you see, identify any code, text, UI elements, or important information. Provide a comprehensive analysis.';
+                            console.log('[DEBUG] Prompt extracted from text input:', prompt);
+                        }
+                    } catch (e) {
+                        // Fallback prompt
+                        prompt = 'Analyze this screenshot in detail. Describe what you see, identify any code, text, UI elements, or important information. Provide a comprehensive analysis.';
+                        console.log('[DEBUG] Using fallback prompt:', prompt);
+                    }
+                }
+                
+                console.log('[DEBUG] Sending screenshot to handler:', imageHandler);
+                const result = await ipcRenderer.invoke(imageHandler, {
                     data: base64data,
+                    prompt: prompt,
                 });
 
+                console.log('[DEBUG] Handler response:', result);
                 if (result.success) {
                     // Track image tokens after successful send
                     const imageTokens = tokenTracker.calculateImageTokens(offscreenCanvas.width, offscreenCanvas.height);
                     tokenTracker.addTokens(imageTokens, 'image');
-                    console.log(`📊 Image sent successfully - ${imageTokens} tokens used (${offscreenCanvas.width}x${offscreenCanvas.height})`);
+                    console.log(`[DEBUG] 📊 Image sent successfully - ${imageTokens} tokens used (${offscreenCanvas.width}x${offscreenCanvas.height})`);
                 } else {
-                    console.error('Failed to send image:', result.error);
+                    console.error('[DEBUG] Failed to send image:', result.error);
                 }
             };
             reader.readAsDataURL(blob);
@@ -585,10 +635,13 @@ function stopCapture() {
         mediaStream = null;
     }
 
-    // Stop macOS audio capture if running
+    // Stop macOS audio capture if running (try both providers)
     if (isMacOS) {
         ipcRenderer.invoke('stop-macos-audio').catch(err => {
             console.error('Error stopping macOS audio:', err);
+        });
+        ipcRenderer.invoke('stop-macos-audio-openai').catch(err => {
+            console.error('Error stopping macOS audio (OpenAI):', err);
         });
     }
 
@@ -619,6 +672,27 @@ async function sendTextMessage(text) {
         return result;
     } catch (error) {
         console.error('Error sending text message:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+// Send text message to OpenAI
+async function sendTextMessageOpenAI(text) {
+    if (!text || text.trim().length === 0) {
+        console.warn('Cannot send empty text message');
+        return { success: false, error: 'Empty message' };
+    }
+
+    try {
+        const result = await ipcRenderer.invoke('send-text-message-openai', text);
+        if (result.success) {
+            console.log('Text message sent to OpenAI successfully');
+        } else {
+            console.error('Failed to send text message to OpenAI:', result.error);
+        }
+        return result;
+    } catch (error) {
+        console.error('Error sending text message to OpenAI:', error);
         return { success: false, error: error.message };
     }
 }
@@ -766,9 +840,11 @@ const audioprocess = {
 
     // Core functionality
     initializeGemini,
+    initializeOpenAI,
     startCapture,
     stopCapture,
     sendTextMessage,
+    sendTextMessageOpenAI,
     handleShortcut,
     captureScreenshot,
     captureManualScreenshot,
@@ -787,6 +863,9 @@ const audioprocess = {
     // Platform detection
     isLinux: isLinux,
     isMacOS: isMacOS,
+
+    // Provider detection
+    getCurrentProvider: () => currentProvider,
 };
 
 // Make it globally available

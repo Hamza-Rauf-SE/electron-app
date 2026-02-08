@@ -5,6 +5,7 @@ if (require('electron-squirrel-startup')) {
 const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const { createWindow, updateGlobalShortcuts } = require('./utils/window');
 const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
+const { setupOpenAIIpcHandlers, stopMacOSAudioCapture: stopOpenAIMacOSAudioCapture } = require('./utils/openai');
 const { initializeRandomProcessNames } = require('./utils/processRandomizer');
 const { applyAntiAnalysisMeasures } = require('./utils/stealthFeatures');
 const { getLocalConfig, writeConfig } = require('./config');
@@ -22,6 +23,7 @@ process.on('warning', warning => {
 });
 
 const geminiSessionRef = { current: null };
+const openaiSessionRef = { current: null };
 let mainWindow = null;
 
 // Initialize random process names for stealth
@@ -44,11 +46,13 @@ app.whenReady().then(async () => {
 
     createMainWindow();
     setupGeminiIpcHandlers(geminiSessionRef);
+    setupOpenAIIpcHandlers(openaiSessionRef);
     setupGeneralIpcHandlers();
 });
 
 app.on('window-all-closed', () => {
     stopMacOSAudioCapture();
+    stopOpenAIMacOSAudioCapture();
     if (process.platform !== 'darwin') {
         app.quit();
     }
@@ -56,6 +60,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
     stopMacOSAudioCapture();
+    stopOpenAIMacOSAudioCapture();
 });
 
 app.on('activate', () => {
@@ -125,6 +130,7 @@ function setupGeneralIpcHandlers() {
     ipcMain.handle('quit-application', async event => {
         try {
             stopMacOSAudioCapture();
+            stopOpenAIMacOSAudioCapture();
             app.quit();
             return { success: true };
         } catch (error) {

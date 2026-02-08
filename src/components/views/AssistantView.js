@@ -597,11 +597,14 @@ export class AssistantView extends LitElement {
     }
 
     async handleScreenshotClick() {
+        console.log('[DEBUG] Screenshot button clicked');
         const textInput = this.shadowRoot.querySelector('#textInput');
         const userMessage = textInput?.value.trim() || 'What do you see in this screenshot? Please analyze it and provide a detailed response.';
+        console.log('[DEBUG] User message/prompt:', userMessage);
 
         // Check if capture is active
         if (!window.audioprocess || !window.audioprocess.captureScreenshot) {
+            console.error('[DEBUG] Screenshot capture not available');
             alert('Screenshot capture is not available. Please start a session first.');
             return;
         }
@@ -618,18 +621,34 @@ export class AssistantView extends LitElement {
         try {
             // Get current image quality setting
             const imageQuality = localStorage.getItem('selectedImageQuality') || 'medium';
+            console.log('[DEBUG] Image quality:', imageQuality);
 
-            // Capture screenshot (this sends the image to Gemini)
+            // Check if we're using OpenAI (Codex will handle the prompt directly)
+            const isOpenAI = window.audioprocess.getCurrentProvider?.() === 'openai';
+            console.log('[DEBUG] Current provider:', window.audioprocess.getCurrentProvider?.(), 'isOpenAI:', isOpenAI);
+
+            // Capture screenshot (this sends the image to the appropriate handler)
+            console.log('[DEBUG] Starting screenshot capture...');
             await window.audioprocess.captureScreenshot(imageQuality, true);
+            console.log('[DEBUG] Screenshot capture completed');
 
-            // Wait a bit for the image to be sent to the server
-            await new Promise(resolve => setTimeout(resolve, 1500));
+            // For OpenAI, Codex handles everything, so don't send follow-up text
+            if (!isOpenAI) {
+                // Wait a bit for the image to be sent to the server (Gemini)
+                await new Promise(resolve => setTimeout(resolve, 1500));
 
-            // Clear input and send the user's message (or default prompt)
-            if (textInput) {
-                textInput.value = '';
+                // Clear input and send the user's message (or default prompt)
+                if (textInput) {
+                    textInput.value = '';
+                }
+                await this.onSendText(userMessage);
+            } else {
+                // For OpenAI, Codex already processed the screenshot with the prompt
+                // Just clear the input
+                if (textInput) {
+                    textInput.value = '';
+                }
             }
-            await this.onSendText(userMessage);
         } catch (error) {
             console.error('Error capturing screenshot:', error);
             alert('Failed to capture screenshot: ' + error.message);

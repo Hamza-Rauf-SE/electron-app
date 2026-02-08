@@ -172,20 +172,24 @@ export class MainView extends LitElement {
     static properties = {
         onStart: { type: Function },
         onStartChat: { type: Function },
+        onStartOpenAI: { type: Function },
         onAPIKeyHelp: { type: Function },
         isInitializing: { type: Boolean },
         onLayoutModeChange: { type: Function },
         showApiKeyError: { type: Boolean },
+        showOpenAIApiKeyError: { type: Boolean },
     };
 
     constructor() {
         super();
         this.onStart = () => {};
         this.onStartChat = () => {};
+        this.onStartOpenAI = () => {};
         this.onAPIKeyHelp = () => {};
         this.isInitializing = false;
         this.onLayoutModeChange = () => {};
         this.showApiKeyError = false;
+        this.showOpenAIApiKeyError = false;
         this.boundKeydownHandler = this.handleKeydown.bind(this);
     }
 
@@ -229,6 +233,14 @@ export class MainView extends LitElement {
         }
     }
 
+    handleOpenAIInput(e) {
+        localStorage.setItem('openaiApiKey', e.target.value);
+        // Clear error state when user starts typing
+        if (this.showOpenAIApiKeyError) {
+            this.showOpenAIApiKeyError = false;
+        }
+    }
+
     handleStartClick() {
         if (this.isInitializing) {
             return;
@@ -243,6 +255,26 @@ export class MainView extends LitElement {
             return;
         }
         this.onStartChat();
+    }
+
+    handleStartOpenAIClick() {
+        if (this.isInitializing) {
+            return;
+        }
+        const apiKey = localStorage.getItem('openaiApiKey')?.trim();
+        if (!apiKey) {
+            this.triggerOpenAIApiKeyError();
+            return;
+        }
+        this.onStartOpenAI();
+    }
+
+    triggerOpenAIApiKeyError() {
+        this.showOpenAIApiKeyError = true;
+        // Remove the error class after 1 second
+        setTimeout(() => {
+            this.showOpenAIApiKeyError = false;
+        }, 1000);
     }
 
     handleAPIKeyHelpClick() {
@@ -337,6 +369,22 @@ export class MainView extends LitElement {
                     ${this.getStartButtonText()}
                 </button>
                 <button @click=${this.handleStartChatClick} class="chat-button">💬 Start Chat</button>
+            </div>
+
+            <div class="input-group" style="margin-top: 20px;">
+                <input
+                    type="password"
+                    placeholder="Enter your OpenAI API Key"
+                    .value=${localStorage.getItem('openaiApiKey') || ''}
+                    @input=${this.handleOpenAIInput}
+                    class="${this.showOpenAIApiKeyError ? 'api-key-error' : ''}"
+                />
+            </div>
+
+            <div class="button-row">
+                <button @click=${this.handleStartOpenAIClick} class="start-button ${this.isInitializing ? 'initializing' : ''}">
+                    Start OpenAI Session
+                </button>
             </div>
 
             <p class="description">
