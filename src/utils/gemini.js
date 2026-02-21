@@ -901,6 +901,13 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             const primaryDisplay = screen.getPrimaryDisplay();
             const { width, height } = primaryDisplay.size;
 
+            // Warmup/Refresh call to force a fresh frame (workaround for Electron stale frame issue)
+            await desktopCapturer.getSources({
+                types: ['screen'],
+                thumbnailSize: { width: 1, height: 1 },
+                fetchWindowIcons: false,
+            });
+
             // Use silent capture with maximum stealth
             const sources = await desktopCapturer.getSources({
                 types: ['screen'],

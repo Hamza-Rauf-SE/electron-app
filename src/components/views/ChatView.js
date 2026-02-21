@@ -428,9 +428,14 @@ export class ChatView extends LitElement {
         try {
             if (!this.isChatStarted) {
                 await this.startChat();
+                // Add a small delay after starting chat to ensure everything is ready
+                await new Promise(resolve => setTimeout(resolve, 300));
             }
 
             this.isLoading = true;
+
+            // Add a small delay before capture to prevent race conditions
+            await new Promise(resolve => setTimeout(resolve, 300));
 
             const { ipcRenderer } = window.require('electron');
 
