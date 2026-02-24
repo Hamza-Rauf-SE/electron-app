@@ -680,8 +680,8 @@ export class CustomizeView extends LitElement {
             moveDown: isMac ? 'Alt+Down' : 'Ctrl+Down',
             moveLeft: isMac ? 'Alt+Left' : 'Ctrl+Left',
             moveRight: isMac ? 'Alt+Right' : 'Ctrl+Right',
-            toggleVisibility: isMac ? 'Cmd+\\' : 'Ctrl+\\',
-            toggleClickThrough: isMac ? 'Cmd+M' : 'Ctrl+M',
+            toggleVisibility: isMac ? 'Cmd+Shift+\\' : 'Ctrl+Shift+\\',
+            toggleClickThrough: isMac ? 'Cmd+Shift+M' : 'Ctrl+Shift+M',
             nextStep: isMac ? 'Cmd+Enter' : 'Ctrl+Enter',
             previousResponse: isMac ? 'Cmd+[' : 'Ctrl+[',
             nextResponse: isMac ? 'Cmd+]' : 'Ctrl+]',
@@ -692,7 +692,7 @@ export class CustomizeView extends LitElement {
             toggleTheme: isMac ? 'Cmd+Shift+T' : 'Ctrl+Shift+T',
             increaseTextOpacity: isMac ? 'Cmd+Shift+B' : 'Ctrl+Shift+B',
             decreaseTextOpacity: isMac ? 'Cmd+Shift+A' : 'Ctrl+Shift+A',
-            quickScreenshotAndSend: isMac ? 'Cmd+J' : 'Ctrl+J',
+            quickScreenshotAndSend: isMac ? 'Cmd+Shift+J' : 'Ctrl+Shift+J',
         };
     }
 
@@ -790,6 +790,11 @@ export class CustomizeView extends LitElement {
                 key: 'toggleVisibility',
                 name: 'Toggle Window Visibility',
                 description: 'Show/hide the application window',
+            },
+            {
+                key: 'toggleVisibilityAlternate',
+                name: 'Toggle Window Visibility (Alternate)',
+                description: 'Alternate shortcut to show/hide the window',
             },
             {
                 key: 'toggleClickThrough',
