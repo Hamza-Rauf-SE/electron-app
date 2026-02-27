@@ -174,8 +174,9 @@ function getDefaultKeybinds() {
         moveDown: isMac ? 'Alt+Down' : 'Ctrl+Down',
         moveLeft: isMac ? 'Alt+Left' : 'Ctrl+Left',
         moveRight: isMac ? 'Alt+Right' : 'Ctrl+Right',
-        toggleVisibility: isMac ? 'Cmd+Shift+\\' : 'Ctrl+Shift+\\',
-        toggleClickThrough: isMac ? 'Cmd+Shift+M' : 'Ctrl+Shift+M',
+        toggleVisibility: isMac ? 'Cmd+\\' : 'Ctrl+\\',
+        toggleVisibilityAlternate: isMac ? 'Cmd+Shift+\\' : 'Ctrl+Shift+\\',
+        toggleClickThrough: isMac ? 'Cmd+M' : 'Ctrl+M',
         nextStep: isMac ? 'Cmd+Enter' : 'Ctrl+Enter',
         previousResponse: isMac ? 'Cmd+[' : 'Ctrl+[',
         nextResponse: isMac ? 'Cmd+]' : 'Ctrl+]',
@@ -362,7 +363,23 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
         try {
             globalShortcut.register(keybinds.quickScreenshotAndSend, () => {
                 console.log('Quick screenshot and send shortcut triggered');
+                // Preserve user's typing focus:
+                // If the app is not currently focused (i.e., user is typing in another app),
+                // don't steal focus when taking the screenshot.
+                const wasFocused = mainWindow.isFocused();
                 sendToRenderer('quick-screenshot-and-send');
+
+                if (!wasFocused) {
+                    setTimeout(() => {
+                        try {
+                            if (!mainWindow.isDestroyed()) {
+                                mainWindow.blur();
+                            }
+                        } catch {
+                            // ignore
+                        }
+                    }, 50);
+                }
             });
             console.log(`Registered quickScreenshotAndSend: ${keybinds.quickScreenshotAndSend}`);
         } catch (error) {

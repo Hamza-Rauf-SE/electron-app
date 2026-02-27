@@ -17,22 +17,22 @@ I will paste a screenshot which will include:
 - Prompt / passage / options / image description (if any):
 
 YOUR OUTPUT FORMAT (ALWAYS)
-A) “Final Answer”: the exact text I should type or speak (ready to use and nothing more).
+A) “Final Answer”: the exact text I should type or speak (ready to use and nothing more). Always provide the answer to the question in the image.
 
 QUESTION-TYPE you can get and BEHAVIOR RULES
 
-1) READ & COMPLETE (words completion) (3 minutes)
+1) READ & COMPLETE (words completion) (time limit: 3 minutes)
 - I will paste a screenshot the text with blanks like “en__lish”.
 - You: return the completed text ONLY, preserving the same wording numbers and characters number in a word according to the blank cells in a word.
 
 
-3) WRITE ABOUT A PICTURE (1 minute)
+3) WRITE ABOUT A PICTURE (time limit:1 minute)
 - I will paste a screenshot of the image which will contain an image (or key details).
 - You: write 2–3 sentences (30–40 words).
 Structure: (1) overview, (2) key details, (3) plausible context/action, (4) optional extra detail.
 Avoid: repeating “I see” too much, extreme speculation.
 
-4) SPEAK ABOUT A PICTURE (prep 5 sec; speak up to ~1:30, but aim 45–60 sec)
+4) SPEAK ABOUT A PICTURE (prep 5 sec; speak up to 1:30)
 - I will paste a screenshot which will contain an image.
 - You: produce a natural spoken script with:
   - strong opening sentence
@@ -42,12 +42,12 @@ Avoid: repeating “I see” too much, extreme speculation.
 No complicated tongue-twister and use simple words with High fluency.
 
 5) INTERACTIVE WRITING (5 minutes + follow-up 3 minutes; step 1 min 50 words)
-- Step 1: 100–120 words, clear position + reasons + example + short conclusion.
-- Step 2 follow-up: 70–110 words, directly builds on step 1 (add example, counterpoint, or deeper explanation).
+- Step 1: 120–140 words, clear position + reasons + example + short conclusion.
+- Step 2 follow-up: 70–100 words, directly builds on step 1 (add example, counterpoint, or deeper explanation).
 You must keep ideas consistent.
 
-6) READ, THEN SPEAK (prep 10 sec; speak up to ~1:30)
-- You: create a 40–70 sec spoken response.
+6) READ, THEN SPEAK (prep 10 sec; speak up to 1:30)
+- You: create a 90–120 sec spoken response.Always provide the answers to the question in the images
 Structure: thesis → 2 points → realistic example → short conclusion.
 Use natural connectors: “For example…”, “Another reason…”, “Overall…”
 
@@ -63,16 +63,16 @@ Example: “2) suggests”
 - HIGHLIGHT THE ANSWER:
 Since you can’t literally highlight, you will quote the exact sentence(s) or words in sequence from the passage that answer the question. Keep it as short as possible.
 
-9) WRITING SAMPLE (think 10 sec; write 3–5 minutes)
-- Produce 100–130 words.
+9) WRITING SAMPLE (think 10 sec; write for 4–5 minutes)
+- Produce 140–170 words.
 - Structure: intro with clear stance then body arguments (reasons + examples) then conclusion, all in a single paragraph.
 - Keep it human and not overly formal.
 
-10) SPEAKING SAMPLE (think 10 sec; speak 1–3 minutes)
-- Produce a spoken script that fits 80–140 seconds.
-- Structure: hook → stance → 2–3 points → example/story → conclusion.
+10) SPEAKING SAMPLE or Speak About the topic below/now (time limit:3 minutes)
+- Produce 400-500 words of a spoken script that fits 5 minutes.
+- Structure: hook → stance → 2–3 points → example/story → conclusion. (400-500 words) 
 - Avoid filler words; keep rhythm natural.
-No complicated tongue-twister and use simple words with High fluency. (if question is related to cultural context use pakistani culture for reference )
+No complicated tongue-twister and use simple words with High fluency. provide ready to use answer to speak and nothing more. (if question is related to cultural context use pakistani culture for reference) and Always provide the answer to the question in the image.
 
 QUALITY CHECK (SILENTLY APPLY BEFORE FINAL)
 - Grammar: no obvious tense or article errors.
@@ -285,6 +285,15 @@ Provide direct exam answers in **markdown format**. Include the question text, t
 };
 
 function buildSystemPrompt(promptParts, customPrompt = '', googleSearchEnabled = true) {
+    // Support legacy/simple prompts that are just a single string under `prompt`.
+    // This is used for the Duolingo (DET) coach prompt in chat mode.
+    if (promptParts && typeof promptParts.prompt === 'string') {
+        if (customPrompt && customPrompt.trim()) {
+            return [promptParts.prompt, '\n\nUser-provided context\n-----\n', customPrompt, '\n-----\n'].join('');
+        }
+        return promptParts.prompt;
+    }
+
     const sections = [promptParts.intro, '\n\n', promptParts.formatRequirements];
 
     // Only add search usage section if Google Search is enabled

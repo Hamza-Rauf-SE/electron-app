@@ -1,10 +1,11 @@
 const { GoogleGenAI } = require('@google/genai');
+const OpenAI = require('openai').default;
 const { BrowserWindow, ipcMain } = require('electron');
 const { spawn, exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { saveDebugAudio } = require('../audioUtils');
-const { getSystemPrompt } = require('./prompts');
+const { getSystemPrompt, profilePrompts } = require('./prompts');
 
 // Conversation tracking variables
 let currentSessionId = null;
@@ -584,6 +585,7 @@ async function sendAudioToGemini(base64Data, geminiSessionRef) {
 // Standard chat (non-realtime) variables
 let standardChatClient = null;
 let standardChatHistory = [];
+let standardChatProvider = 'gemini';
 
 // Load DET prompt for chat
 function loadDETPrompt() {
@@ -609,12 +611,41 @@ function loadDETPrompt() {
     }
 }
 
+function loadChatModePrompt() {
+    // Prefer duolingo prompt from src/utils/prompts.js (requested)
+    try {
+        const duolingoPrompt = profilePrompts?.duolingo;
+        const promptText = getSystemPrompt('duolingo', '', false);
+        if (promptText && typeof promptText === 'string') {
+            return promptText;
+        }
+
+        // fallback to legacy format
+        if (duolingoPrompt && typeof duolingoPrompt.prompt === 'string') {
+            return duolingoPrompt.prompt;
+        }
+    } catch (error) {
+        console.error('Error loading duolingo prompt from prompts.js:', error);
+    }
+
+    // Fallback to det_prompt.txt if something goes wrong
+    return loadDETPrompt();
+}
+
 async function initializeStandardChat(apiKey) {
     try {
-        standardChatClient = new GoogleGenAI({
-            vertexai: false,
-            apiKey: apiKey,
-        });
+        // If key looks like an OpenAI key, use OpenAI for chat mode. Otherwise default to Gemini.
+        // This keeps the rest of the app (live Gemini session) unchanged.
+        if (typeof apiKey === 'string' && apiKey.trim().toLowerCase().startsWith('sk-')) {
+            standardChatClient = new OpenAI({ apiKey: apiKey.trim() });
+            standardChatProvider = 'openai';
+        } else {
+            standardChatClient = new GoogleGenAI({
+                vertexai: false,
+                apiKey: apiKey,
+            });
+            standardChatProvider = 'gemini';
+        }
         standardChatHistory = [];
         console.log('Standard chat initialized');
         return { success: true };
@@ -630,6 +661,48 @@ async function sendStandardChatMessage(message, imageData = null) {
     }
 
     try {
+        if (standardChatProvider === 'openai') {
+            const detPrompt = loadChatModePrompt();
+
+            const input = [];
+            input.push({ role: 'developer', content: detPrompt });
+
+            const userContent = [];
+            if (imageData) {
+                userContent.push({
+                    type: 'input_image',
+                    image_url: `data:image/jpeg;base64,${imageData}`,
+                });
+            }
+            if (message && message.trim()) {
+                userContent.push({ type: 'input_text', text: message.trim() });
+            }
+            input.push({ role: 'user', content: userContent });
+
+            const response = await standardChatClient.responses.create({
+                model: 'gpt-5.2',
+                reasoning: { effort: 'low' },
+                input,
+            });
+
+            const text = response.output_text || '';
+
+            // Save to chat history
+            standardChatHistory.push({
+                role: 'user',
+                message: message,
+                hasImage: !!imageData,
+                timestamp: Date.now(),
+            });
+            standardChatHistory.push({
+                role: 'model',
+                message: text,
+                timestamp: Date.now(),
+            });
+
+            return { success: true, response: text };
+        }
+
         // Build the message parts
         const parts = [];
 
@@ -647,7 +720,7 @@ async function sendStandardChatMessage(message, imageData = null) {
         }
 
         // Load DET prompt for system instruction
-        const detPrompt = loadDETPrompt();
+        const detPrompt = loadChatModePrompt();
 
         // Configure tools and thinking for gemini-2.5-pro
         const tools = [{ googleSearch: {} }];
