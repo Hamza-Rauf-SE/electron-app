@@ -20,6 +20,30 @@ let messageBuffer = '';
 let openaiWebSocket = null;
 let openaiSessionRef = { current: null };
 
+function buildScreenshotAssistantPrompt(userPrompt) {
+    const basePrompt = `You are analyzing a user-provided screenshot.
+
+PRIMARY GOAL:
+- If the screenshot contains a question (including MCQ, coding prompt, interview question, error dialog asking what to do, etc.), answer that question directly.
+
+INSTRUCTIONS:
+- First, read/identify the exact question(s) visible in the screenshot.
+- Answer the question(s) with a complete, usable final answer.
+- If it is a coding question: provide (1) a very short approach (max 3–6 bullets) then (2) the full code solution.
+- If it is an MCQ: output the correct choice and a 1–2 sentence justification.
+- If there is no clear question in the screenshot: briefly describe what’s on screen and point out the most important details.
+
+OUTPUT:
+- Respond in markdown.
+- Do not add meta commentary like “I see a screenshot…” or “I will OCR…”. Just answer.
+`;
+
+    const trimmedUserPrompt = typeof userPrompt === 'string' ? userPrompt.trim() : '';
+    if (!trimmedUserPrompt) return basePrompt;
+
+    return `${basePrompt}\nUser request (optional):\n${trimmedUserPrompt}`;
+}
+
 function sendToRenderer(channel, data) {
     const windows = BrowserWindow.getAllWindows();
     if (windows.length > 0) {
@@ -336,8 +360,7 @@ async function startMacOSAudioCapture(openaiSessionRef) {
         }
     } catch (error) {
         if (error.code === 'Unknown system error -86' || error.errno === -86) {
-            const errorMsg =
-                'SystemAudioDump architecture mismatch. The binary is not compatible with your system architecture.';
+            const errorMsg = 'SystemAudioDump architecture mismatch. The binary is not compatible with your system architecture.';
             console.error(errorMsg);
             sendToRenderer('update-status', 'Error: SystemAudioDump architecture mismatch');
         } else {
@@ -392,8 +415,7 @@ async function startMacOSAudioCapture(openaiSessionRef) {
     systemAudioProc.on('error', err => {
         let errorMsg = 'SystemAudioDump process error: ' + err.message;
         if (err.code === 'Unknown system error -86' || err.errno === -86) {
-            errorMsg =
-                'SystemAudioDump architecture mismatch. The binary is not compatible with your system architecture.';
+            errorMsg = 'SystemAudioDump architecture mismatch. The binary is not compatible with your system architecture.';
             sendToRenderer('update-status', 'Error: SystemAudioDump architecture mismatch');
         } else {
             sendToRenderer('update-status', `Error: SystemAudioDump failed - ${err.message}`);
@@ -528,7 +550,7 @@ function setupOpenAIIpcHandlers(openaiSessionRef) {
             });
 
             // Use GPT-5.1-Codex-Max for screenshot analysis
-            const analysisPrompt = prompt || 'Analyze this screenshot in detail. Describe what you see, identify any code, text, UI elements, or important information. Provide a comprehensive analysis.';
+            const analysisPrompt = buildScreenshotAssistantPrompt(prompt);
             console.log('[DEBUG] Using prompt:', analysisPrompt);
             console.log('[DEBUG] Sending request to GPT-5.1-Codex-Max...');
 
