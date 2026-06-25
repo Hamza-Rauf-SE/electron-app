@@ -1055,13 +1055,30 @@ export class CustomizeView extends LitElement {
                             <label class="form-label">Audio Mode</label>
                             <select class="form-control" .value=${localStorage.getItem('audioMode') || 'speaker_only'} @change=${e =>
                                 localStorage.setItem('audioMode', e.target.value)}>
-                                <option value="speaker_only">Speaker Only (Interviewer)</option>
+                                <option value="speaker_only">System Audio (Speakers/Headphones)</option>
                                 <option value="mic_only">Microphone Only (Me)</option>
-                                <option value="both">Both Speaker & Microphone</option>
+                                <option value="both">System Audio + Microphone</option>
                             </select>
                             <div class="form-description">
                                 Choose which audio sources to capture for the AI.
                             </div>
+                        </div>
+
+                        <div class="checkbox-group">
+                            <input
+                                type="checkbox"
+                                class="checkbox-input"
+                                id="audio-device-auto-restart"
+                                .checked=${localStorage.getItem('audioDeviceAutoRestart') !== 'false'}
+                                @change=${e => {
+                                    localStorage.setItem('audioDeviceAutoRestart', e.target.checked ? 'true' : 'false');
+                                    this.requestUpdate();
+                                }}
+                            />
+                            <label for="audio-device-auto-restart" class="checkbox-label">Reconnect system audio when headphones change</label>
+                        </div>
+                        <div class="form-description" style="margin-left: 22px;">
+                            Restarts macOS system audio capture after headphones or audio devices are connected/disconnected.
                         </div>
 
                         <div class="form-group full-width">
@@ -1270,8 +1287,8 @@ export class CustomizeView extends LitElement {
                                         this.selectedImageQuality === 'high'
                                             ? 'Best quality, uses more tokens'
                                             : this.selectedImageQuality === 'medium'
-                                            ? 'Balanced quality and token usage'
-                                            : 'Lower quality, uses fewer tokens'
+                                              ? 'Balanced quality and token usage'
+                                              : 'Lower quality, uses fewer tokens'
                                     }
                                 </div>
                             </div>
