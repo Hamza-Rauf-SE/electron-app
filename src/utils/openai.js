@@ -9,11 +9,16 @@ const {
     stopMacOSAudioCapture: stopSharedMacOSAudioCapture,
 } = require('./audioCapture');
 
+const OPENAI_REALTIME_MODEL = 'gpt-realtime-1.5';
+const OPENAI_CODEX_MODEL = 'gpt-5.1-codex-max';
+
 // Conversation tracking variables
 let currentSessionId = null;
 let currentTranscription = '';
 let conversationHistory = [];
 let isInitializingSession = false;
+let currentOpenAIApiKey = null;
+let currentOpenAISystemPrompt = '';
 
 let messageBuffer = '';
 
@@ -43,6 +48,80 @@ OUTPUT:
     if (!trimmedUserPrompt) return basePrompt;
 
     return `${basePrompt}\nUser request (optional):\n${trimmedUserPrompt}`;
+}
+
+function buildCodexChatPrompt(text) {
+    const recentHistory = conversationHistory
+        .slice(-8)
+        .map((turn, index) => [`Turn ${index + 1}:`, `User/audio transcript: ${turn.transcription}`, `Assistant: ${turn.ai_response}`].join('\n'))
+        .join('\n\n');
+
+    const historySection = recentHistory ? `RECENT CONTEXT:\n${recentHistory}\n\n` : '';
+
+    return `${currentOpenAISystemPrompt || 'You are a helpful real-time assistant. Respond clearly and directly in markdown.'}
+
+${historySection}USER CHAT MESSAGE:
+${text.trim()}`;
+}
+
+function extractOpenAIResponseText(result, fallbackText = 'No response available') {
+    if (result?.output_text) {
+        return result.output_text;
+    }
+
+    if (result?.text) {
+        return result.text;
+    }
+
+    if (typeof result === 'string') {
+        return result;
+    }
+
+    if (!Array.isArray(result?.output)) {
+        return fallbackText;
+    }
+
+    const textParts = [];
+
+    for (const outputItem of result.output) {
+        if (typeof outputItem === 'string') {
+            textParts.push(outputItem);
+            continue;
+        }
+
+        if (outputItem?.text) {
+            textParts.push(outputItem.text);
+        }
+
+        if (Array.isArray(outputItem?.content)) {
+            for (const contentPart of outputItem.content) {
+                if (contentPart?.text) {
+                    textParts.push(contentPart.text);
+                } else if (typeof contentPart === 'string') {
+                    textParts.push(contentPart);
+                }
+            }
+        }
+    }
+
+    return textParts.join('\n').trim() || fallbackText;
+}
+
+async function getOpenAIApiKeyFromStorage() {
+    if (currentOpenAIApiKey) {
+        return currentOpenAIApiKey;
+    }
+
+    const windows = BrowserWindow.getAllWindows();
+    if (windows.length === 0) {
+        return null;
+    }
+
+    const apiKey = await windows[0].webContents.executeJavaScript(`
+        localStorage.getItem('openaiApiKey')
+    `);
+
+    return typeof apiKey === 'string' ? apiKey.trim() : null;
 }
 
 function sendToRenderer(channel, data) {
@@ -127,9 +206,11 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
     initializeNewSession();
 
     const systemPrompt = getSystemPrompt(profile, customPrompt, false); // OpenAI doesn't support Google Search
+    currentOpenAIApiKey = typeof apiKey === 'string' ? apiKey.trim() : null;
+    currentOpenAISystemPrompt = systemPrompt;
 
     try {
-        const url = 'wss://api.openai.com/v1/realtime?model=gpt-realtime';
+        const url = `wss://api.openai.com/v1/realtime?model=${OPENAI_REALTIME_MODEL}`;
         openaiWebSocket = new WebSocket(url, {
             headers: {
                 Authorization: `Bearer ${apiKey}`,
@@ -149,7 +230,7 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
                 type: 'session.update',
                 session: {
                     type: 'realtime',
-                    model: 'gpt-realtime',
+                    model: OPENAI_REALTIME_MODEL,
                     output_modalities: ['text'], // Text output only - no audio responses
                     audio: {
                         input: {
@@ -262,6 +343,8 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
             sendToRenderer('update-status', 'OpenAI session closed');
             openaiWebSocket = null;
             openaiSessionRef.current = null;
+            currentOpenAIApiKey = null;
+            currentOpenAISystemPrompt = '';
             isInitializingSession = false;
             sendToRenderer('session-initializing', false);
         });
@@ -272,6 +355,8 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
         return true;
     } catch (error) {
         console.error('Failed to initialize OpenAI session:', error);
+        currentOpenAIApiKey = null;
+        currentOpenAISystemPrompt = '';
         isInitializingSession = false;
         sendToRenderer('session-initializing', false);
         return false;
@@ -363,7 +448,7 @@ function setupOpenAIIpcHandlers(openaiSessionRef) {
     });
 
     ipcMain.handle('send-image-content-openai', async (event, { data, debug, prompt }) => {
-        // For OpenAI sessions, use GPT-5.1-Codex-Max for screenshot analysis instead of Realtime API
+        // For OpenAI sessions, use Codex for screenshot analysis instead of Realtime API.
         console.log('[DEBUG] send-image-content-openai called');
         try {
             if (!data || typeof data !== 'string') {
@@ -372,15 +457,8 @@ function setupOpenAIIpcHandlers(openaiSessionRef) {
             }
             console.log('[DEBUG] Image data received, length:', data.length, 'characters');
 
-            // Get OpenAI API key from the session or from storage
             console.log('[DEBUG] Getting OpenAI API key...');
-            const windows = BrowserWindow.getAllWindows();
-            let apiKey = null;
-            if (windows.length > 0) {
-                apiKey = await windows[0].webContents.executeJavaScript(`
-                    localStorage.getItem('openaiApiKey')
-                `);
-            }
+            const apiKey = await getOpenAIApiKeyFromStorage();
 
             if (!apiKey) {
                 console.error('[DEBUG] OpenAI API key not found');
@@ -392,13 +470,13 @@ function setupOpenAIIpcHandlers(openaiSessionRef) {
                 apiKey: apiKey.trim(),
             });
 
-            // Use GPT-5.1-Codex-Max for screenshot analysis
+            // Use Codex for screenshot analysis
             const analysisPrompt = buildScreenshotAssistantPrompt(prompt);
             console.log('[DEBUG] Using prompt:', analysisPrompt);
-            console.log('[DEBUG] Sending request to GPT-5.1-Codex-Max...');
+            console.log(`[DEBUG] Sending request to ${OPENAI_CODEX_MODEL}...`);
 
             const result = await openai.responses.create({
-                model: 'gpt-5.1-codex-max',
+                model: OPENAI_CODEX_MODEL,
                 input: [
                     {
                         role: 'user',
@@ -418,33 +496,8 @@ function setupOpenAIIpcHandlers(openaiSessionRef) {
 
             console.log('[DEBUG] Codex API response received:', JSON.stringify(result, null, 2));
 
-            // Extract text from response - check multiple possible response formats
-            let analysisText = 'No analysis available';
             console.log('[DEBUG] Extracting text from response...');
-            if (result.output_text) {
-                analysisText = result.output_text;
-                console.log('[DEBUG] Found text in result.output_text');
-            } else if (result.output && Array.isArray(result.output)) {
-                // Try to find text in output array
-                console.log('[DEBUG] Checking result.output array, length:', result.output.length);
-                for (const outputItem of result.output) {
-                    if (outputItem.text) {
-                        analysisText = outputItem.text;
-                        console.log('[DEBUG] Found text in outputItem.text');
-                        break;
-                    } else if (typeof outputItem === 'string') {
-                        analysisText = outputItem;
-                        console.log('[DEBUG] Found string in outputItem');
-                        break;
-                    }
-                }
-            } else if (result.text) {
-                analysisText = result.text;
-                console.log('[DEBUG] Found text in result.text');
-            } else if (typeof result === 'string') {
-                analysisText = result;
-                console.log('[DEBUG] Result is a string');
-            }
+            const analysisText = extractOpenAIResponseText(result, 'No analysis available');
 
             console.log('[DEBUG] Codex analysis result length:', analysisText.length);
             console.log('[DEBUG] Codex analysis result preview:', analysisText.substring(0, 100) + '...');
@@ -477,33 +530,44 @@ function setupOpenAIIpcHandlers(openaiSessionRef) {
                 return { success: false, error: 'Invalid text message' };
             }
 
-            console.log('Sending text message to OpenAI:', text);
+            const apiKey = await getOpenAIApiKeyFromStorage();
+            if (!apiKey) {
+                return { success: false, error: 'OpenAI API key not found' };
+            }
 
-            const event = {
-                type: 'conversation.item.create',
-                item: {
-                    type: 'message',
-                    role: 'user',
-                    content: [
-                        {
-                            type: 'input_text',
-                            text: text.trim(),
-                        },
-                    ],
-                },
-            };
+            console.log(`Sending chat message to ${OPENAI_CODEX_MODEL}:`, text);
+            sendToRenderer('update-status', 'Thinking with Codex...');
 
-            openaiSessionRef.current.send(JSON.stringify(event));
+            const openai = new OpenAI({
+                apiKey,
+            });
 
-            // Trigger response
-            const responseEvent = {
-                type: 'response.create',
-            };
-            openaiSessionRef.current.send(JSON.stringify(responseEvent));
+            const codexPrompt = buildCodexChatPrompt(text);
+            const result = await openai.responses.create({
+                model: OPENAI_CODEX_MODEL,
+                input: [
+                    {
+                        role: 'user',
+                        content: [
+                            {
+                                type: 'input_text',
+                                text: codexPrompt,
+                            },
+                        ],
+                    },
+                ],
+            });
 
-            return { success: true };
+            const responseText = extractOpenAIResponseText(result);
+            sendToRenderer('update-response', { text: responseText, animate: false });
+            sendToRenderer('response-complete', true);
+            sendToRenderer('update-status', 'Listening...');
+            saveConversationTurn(text, responseText);
+
+            return { success: true, response: responseText };
         } catch (error) {
-            console.error('Error sending text to OpenAI:', error);
+            console.error('Error sending text to Codex:', error);
+            sendToRenderer('update-status', `Error: ${error.message || 'Codex chat failed'}`);
             return { success: false, error: error.message };
         }
     });
@@ -544,6 +608,8 @@ function setupOpenAIIpcHandlers(openaiSessionRef) {
                 openaiSessionRef.current = null;
                 openaiWebSocket = null;
             }
+            currentOpenAIApiKey = null;
+            currentOpenAISystemPrompt = '';
 
             return { success: true };
         } catch (error) {
