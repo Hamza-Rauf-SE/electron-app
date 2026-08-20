@@ -44,6 +44,8 @@ let macOSSystemAudioActive = false;
 let activeMacOSAudioStartHandler = null;
 let activeMacOSAudioStopHandler = null;
 let isRestartingMacOSAudio = false;
+let lastAudioPlan = null;
+let realtimeAudioSuspended = false;
 
 const isLinux = process.platform === 'linux';
 const isMacOS = process.platform === 'darwin';
@@ -305,6 +307,8 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
     console.log('🎯 Token tracker reset for new capture session');
 
     const audioPlan = getAudioCapturePlan(localStorage.getItem('audioMode'));
+    lastAudioPlan = audioPlan;
+    realtimeAudioSuspended = false;
 
     try {
         if (isMacOS) {
@@ -592,7 +596,61 @@ function setupWindowsLoopbackProcessing() {
     audioProcessor.connect(audioContext.destination);
 }
 
-async function captureScreenshot(imageQuality = 'medium', isManual = false) {
+/**
+ * Pauses audio streaming without touching mediaStream/hiddenVideo/canvas.
+ *
+ * stopCapture() would stop the display-media tracks, which permanently breaks
+ * captureScreenshot and forces the macOS screen picker to re-prompt on restart.
+ */
+async function suspendRealtimeAudio() {
+    if (realtimeAudioSuspended) return { success: true, alreadySuspended: true };
+    realtimeAudioSuspended = true;
+
+    teardownMacOSAudioDeviceRestart();
+
+    if (isMacOS) {
+        await ipcRenderer.invoke('stop-macos-audio-openai').catch(err => {
+            console.warn('Error stopping macOS audio on suspend:', err);
+        });
+    }
+
+    // Suspending the context halts onaudioprocess while keeping the graph reusable.
+    try {
+        if (audioContext && audioContext.state === 'running') await audioContext.suspend();
+        if (micAudioContext && micAudioContext.state === 'running') await micAudioContext.suspend();
+    } catch (error) {
+        console.warn('Error suspending audio contexts:', error);
+    }
+
+    console.log('Realtime audio suspended');
+    return { success: true };
+}
+
+async function resumeRealtimeAudio(provider = 'openai') {
+    if (!realtimeAudioSuspended) return { success: true, alreadyRunning: true };
+    realtimeAudioSuspended = false;
+
+    try {
+        if (audioContext && audioContext.state === 'suspended') await audioContext.resume();
+        if (micAudioContext && micAudioContext.state === 'suspended') await micAudioContext.resume();
+    } catch (error) {
+        console.warn('Error resuming audio contexts:', error);
+    }
+
+    if (isMacOS && lastAudioPlan?.captureSystemAudio) {
+        try {
+            await startMacOSSystemAudio(provider);
+        } catch (error) {
+            console.warn('Failed to restart macOS system audio on resume:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    console.log('Realtime audio resumed');
+    return { success: true };
+}
+
+async function captureScreenshot(imageQuality = 'medium', isManual = false, target = null, prompt = null) {
     // Only manual screenshots are allowed - automatic capture is disabled for stealth
     if (!isManual) {
         console.log('Automatic screenshot capture is disabled');
@@ -679,36 +737,19 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
                 }
                 console.log('[DEBUG] Base64 data generated, length:', base64data.length);
 
-                // Route to appropriate handler based on current provider
-                // For OpenAI, we'll handle the prompt separately in the handler
-                const imageHandler = currentProvider === 'openai' ? 'send-image-content-openai' : 'send-image-content';
-                console.log('[DEBUG] Using image handler:', imageHandler, 'for provider:', currentProvider);
+                // The caller decides the destination. currentProvider is a
+                // session-level fact and cannot express which tab is active.
+                const resolvedTarget = target || (currentProvider === 'openai' ? 'openai-realtime' : 'gemini');
+                const imageHandler = resolvedTarget === 'gemini' ? 'send-image-content' : 'send-image-content-openai';
+                const resolvedPrompt =
+                    typeof prompt === 'string' && prompt.trim()
+                        ? prompt.trim()
+                        : 'Analyze this screenshot in detail. Describe what you see, identify any code, text, UI elements, or important information. Provide a comprehensive analysis.';
 
-                // Get the prompt from the text input if available (for OpenAI Codex)
-                let prompt = null;
-                if (currentProvider === 'openai') {
-                    // Try to get prompt from the app element's text input
-                    try {
-                        const appElement = getAppElement();
-                        if (appElement) {
-                            const textInput = appElement.shadowRoot?.querySelector('#textInput');
-                            prompt =
-                                textInput?.value?.trim() ||
-                                'Analyze this screenshot in detail. Describe what you see, identify any code, text, UI elements, or important information. Provide a comprehensive analysis.';
-                            console.log('[DEBUG] Prompt extracted from text input:', prompt);
-                        }
-                    } catch (e) {
-                        // Fallback prompt
-                        prompt =
-                            'Analyze this screenshot in detail. Describe what you see, identify any code, text, UI elements, or important information. Provide a comprehensive analysis.';
-                        console.log('[DEBUG] Using fallback prompt:', prompt);
-                    }
-                }
-
-                console.log('[DEBUG] Sending screenshot to handler:', imageHandler);
+                console.log('[DEBUG] Sending screenshot to handler:', imageHandler, 'target:', resolvedTarget);
                 const result = await ipcRenderer.invoke(imageHandler, {
                     data: base64data,
-                    prompt: prompt,
+                    prompt: resolvedTarget === 'gemini' ? null : resolvedPrompt,
                 });
 
                 console.log('[DEBUG] Handler response:', result);
@@ -721,6 +762,12 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
                     );
                 } else {
                     console.error('[DEBUG] Failed to send image:', result.error);
+                    // Otherwise a screenshot taken while realtime is paused fails silently.
+                    audioprocess.setStatus(
+                        result.code === 'REALTIME_NOT_CONNECTED'
+                            ? 'Realtime is paused - press Start realtime to resume'
+                            : 'Failed to send screenshot: ' + (result.error || 'unknown error')
+                    );
                 }
             };
             reader.readAsDataURL(blob);
@@ -730,18 +777,30 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
     );
 }
 
-async function captureManualScreenshot(imageQuality = null) {
-    console.log('Manual screenshot triggered');
-    // Manual screenshots always work regardless of the setting
-    // The setting only controls automatic screenshots
-    const quality = imageQuality || currentImageQuality;
-    await captureScreenshot(quality, true); // Pass true for isManual
-    await new Promise(resolve => setTimeout(resolve, 2000)); // TODO shitty hack
-    await sendTextMessage(`Help me on this page, give me the answer no bs, complete answer.
+const DEFAULT_SCREENSHOT_PROMPT = `Help me on this page, give me the answer no bs, complete answer.
         So if its a code question, give me the approach in few bullet points, then the entire code. Also if theres anything else i need to know, tell me.
         If its a question about the website, give me the answer no bs, complete answer.
         If its a mcq question, give me the answer no bs, complete answer.
-        `);
+        `;
+
+async function captureManualScreenshot(imageQuality = null, target = null, prompt = null) {
+    console.log('Manual screenshot triggered');
+    // Manual screenshots always work regardless of the setting;
+    // the setting only controls automatic screenshots.
+    const quality = imageQuality || currentImageQuality;
+    const resolvedTarget = target || (currentProvider === 'openai' ? 'openai-realtime' : 'gemini');
+    const resolvedPrompt = typeof prompt === 'string' && prompt.trim() ? prompt.trim() : DEFAULT_SCREENSHOT_PROMPT;
+
+    if (resolvedTarget === 'gemini') {
+        // Gemini needs the image and the question as two separate sends.
+        await captureScreenshot(quality, true, 'gemini');
+        await new Promise(resolve => setTimeout(resolve, 2000)); // TODO shitty hack
+        await sendTextMessage(DEFAULT_SCREENSHOT_PROMPT);
+        return;
+    }
+
+    // The realtime API carries the image and the prompt in one conversation item.
+    await captureScreenshot(quality, true, resolvedTarget, resolvedPrompt);
 }
 
 // Expose functions to global scope for external access
@@ -804,6 +863,11 @@ function stopCapture() {
     }
     offscreenCanvas = null;
     offscreenContext = null;
+
+    // Otherwise a later Gemini session would still route screenshots to OpenAI.
+    currentProvider = 'gemini';
+    lastAudioPlan = null;
+    realtimeAudioSuspended = false;
 }
 
 // Send text message to Gemini
@@ -953,15 +1017,26 @@ ipcRenderer.on('clear-sensitive-data', () => {
 
 // Handle shortcuts based on current view
 function handleShortcut(shortcutKey) {
-    const currentView = audioprocess.getCurrentView();
+    if (shortcutKey !== 'ctrl+enter' && shortcutKey !== 'cmd+enter') return;
 
-    if (shortcutKey === 'ctrl+enter' || shortcutKey === 'cmd+enter') {
-        if (currentView === 'main') {
-            audioprocess.element().handleStart();
-        } else {
-            captureManualScreenshot();
-        }
+    const app = getAppElement();
+    if (!app) return;
+
+    if (app.currentView === 'main') {
+        app.handleStart();
+        return;
     }
+
+    if (app.currentView === 'assistant' && app.sessionProvider === 'openai') {
+        if (app.activeSessionTab === 'codex') {
+            app.handleCodexCaptureAndSend();
+        } else {
+            captureManualScreenshot(null, 'openai-realtime', app.getActiveTabPrompt?.());
+        }
+        return;
+    }
+
+    captureManualScreenshot();
 }
 
 // Create reference to the main app element (lazy initialization)
@@ -999,6 +1074,8 @@ const audioprocess = {
     handleShortcut,
     captureScreenshot,
     captureManualScreenshot,
+    suspendRealtimeAudio,
+    resumeRealtimeAudio,
 
     // Conversation history functions
     getAllConversationSessions,

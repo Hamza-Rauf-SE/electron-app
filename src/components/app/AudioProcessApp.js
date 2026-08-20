@@ -8,6 +8,8 @@ import { AssistantView } from '../views/AssistantView.js';
 import { OnboardingView } from '../views/OnboardingView.js';
 import { AdvancedView } from '../views/AdvancedView.js';
 import { ChatView } from '../views/ChatView.js';
+import { OpenAISessionView } from '../views/OpenAISessionView.js';
+import { CodexChatView } from '../views/CodexChatView.js';
 
 export class AudioProcessApp extends LitElement {
     static styles = css`
@@ -123,6 +125,23 @@ export class AudioProcessApp extends LitElement {
         _isClickThrough: { state: true },
         _awaitingNewResponse: { state: true },
         shouldAnimateResponse: { type: Boolean },
+
+        // Which provider owns the current session. Deliberately not derived from
+        // audioprocess.getCurrentProvider(), which is session-scoped and stale.
+        sessionProvider: { type: String },
+        activeSessionTab: { type: String },
+        realtimeActive: { type: Boolean },
+        realtimeBusy: { state: true },
+
+        codexMessages: { type: Array },
+        codexLoading: { type: Boolean },
+        codexPendingImage: { type: String },
+        codexStatusText: { type: String },
+        codexReasoningText: { type: String },
+        codexErrorText: { type: String },
+        codexReasoningEffort: { type: String },
+        codexElapsedSeconds: { type: Number },
+        codexUnread: { type: Number },
     };
 
     constructor() {
@@ -147,6 +166,24 @@ export class AudioProcessApp extends LitElement {
         this._awaitingNewResponse = false;
         this._currentResponseIsComplete = true;
         this.shouldAnimateResponse = false;
+
+        this.sessionProvider = null;
+        this.activeSessionTab = 'realtime';
+        this.realtimeActive = false;
+        this.realtimeBusy = false;
+        this.realtimeSuspended = false;
+
+        this.codexMessages = [];
+        this.codexLoading = false;
+        this.codexPendingImage = null;
+        this.codexStatusText = '';
+        this.codexReasoningText = '';
+        this.codexErrorText = '';
+        this.codexReasoningEffort = localStorage.getItem('codexReasoningEffort') || 'high';
+        this.codexElapsedSeconds = 0;
+        this.codexUnread = 0;
+        this._codexTimer = null;
+        this._codexStartedAt = null;
 
         // Apply layout mode and theme to document root
         this.updateLayoutMode();
@@ -187,6 +224,44 @@ export class AudioProcessApp extends LitElement {
             });
             ipcRenderer.on('toggle-theme', () => {
                 this.toggleTheme();
+            });
+
+            // Realtime lifecycle (was emitted but never consumed).
+            ipcRenderer.on('session-initializing', (_, initializing) => {
+                this.realtimeBusy = !!initializing;
+            });
+            ipcRenderer.on('realtime-state', (_, payload) => {
+                this.handleRealtimeState(payload);
+            });
+
+            // Tab 2 (gpt-5.5) uses its own channels so it can never contaminate
+            // the realtime transcript reducer in setResponse().
+            ipcRenderer.on('codex-chat-status', (_, payload) => {
+                this.handleCodexStatus(payload);
+            });
+            ipcRenderer.on('codex-reasoning-delta', (_, payload) => {
+                this.codexReasoningText = (this.codexReasoningText + (payload?.delta || '')).slice(-400);
+            });
+            ipcRenderer.on('codex-chat-delta', (_, payload) => {
+                this.upsertCodexMessage({ id: payload.id, role: 'assistant', text: payload.text, streaming: true });
+            });
+            ipcRenderer.on('codex-chat-message', (_, payload) => {
+                this.upsertCodexMessage({ ...payload, streaming: false });
+                if (payload?.role === 'assistant') {
+                    this.stopCodexTimer();
+                    this.codexLoading = false;
+                    this.codexReasoningText = '';
+                    if (this.activeSessionTab !== 'codex') {
+                        this.codexUnread = this.codexUnread + 1;
+                    }
+                }
+            });
+            ipcRenderer.on('codex-chat-error', (_, payload) => {
+                this.stopCodexTimer();
+                this.codexLoading = false;
+                this.codexErrorText = payload?.retryAfter
+                    ? `${payload.error} (retry in ${payload.retryAfter}s)`
+                    : payload?.error || 'GPT-5.5 request failed';
             });
         }
     }
@@ -232,7 +307,15 @@ export class AudioProcessApp extends LitElement {
             ipcRenderer.removeAllListeners('increase-transparency');
             ipcRenderer.removeAllListeners('decrease-transparency');
             ipcRenderer.removeAllListeners('toggle-theme');
+            ipcRenderer.removeAllListeners('session-initializing');
+            ipcRenderer.removeAllListeners('realtime-state');
+            ipcRenderer.removeAllListeners('codex-chat-status');
+            ipcRenderer.removeAllListeners('codex-reasoning-delta');
+            ipcRenderer.removeAllListeners('codex-chat-delta');
+            ipcRenderer.removeAllListeners('codex-chat-message');
+            ipcRenderer.removeAllListeners('codex-chat-error');
         }
+        this.stopCodexTimer();
     }
 
     setStatus(text) {
@@ -256,7 +339,15 @@ export class AudioProcessApp extends LitElement {
         const preview = responseText.substring(0, 50).replace(/\n/g, ' ');
         console.log(
             '[setResponse] Called with:',
-            preview + '... (len=' + responseText.length + ') awaiting=' + this._awaitingNewResponse + ' complete=' + this._currentResponseIsComplete + ' animate=' + shouldAnimate
+            preview +
+                '... (len=' +
+                responseText.length +
+                ') awaiting=' +
+                this._awaitingNewResponse +
+                ' complete=' +
+                this._currentResponseIsComplete +
+                ' animate=' +
+                shouldAnimate
         );
 
         if (this._awaitingNewResponse || this.responses.length === 0) {
@@ -312,11 +403,14 @@ export class AudioProcessApp extends LitElement {
             // Close the session (check which type)
             if (window.require) {
                 const { ipcRenderer } = window.require('electron');
+                await ipcRenderer.invoke('codex-abort').catch(() => {});
                 // Try to close both session types (only one will be active)
                 await ipcRenderer.invoke('close-session').catch(() => {});
                 await ipcRenderer.invoke('close-openai-session').catch(() => {});
+                await ipcRenderer.invoke('codex-clear-history').catch(() => {});
             }
             this.sessionActive = false;
+            this.resetSessionState();
             this.currentView = 'main';
             console.log('Session closed');
         } else if (this.currentView === 'chat') {
@@ -356,6 +450,7 @@ export class AudioProcessApp extends LitElement {
             return;
         }
 
+        this.sessionProvider = 'gemini';
         await audioprocess.initializeGemini(this.selectedProfile, this.selectedLanguage);
         // Pass the screenshot interval as string (including 'manual' option)
         audioprocess.startCapture(this.selectedScreenshotInterval, this.selectedImageQuality);
@@ -380,6 +475,27 @@ export class AudioProcessApp extends LitElement {
             return;
         }
 
+        this.sessionProvider = 'openai';
+        this.activeSessionTab = 'realtime';
+        this.realtimeActive = true;
+        this.realtimeSuspended = false;
+
+        // A new session starts with a clean chat tab.
+        this.codexMessages = [];
+        this.codexPendingImage = null;
+        this.codexReasoningText = '';
+        this.codexErrorText = '';
+        this.codexStatusText = '';
+        this.codexUnread = 0;
+        this.stopCodexTimer();
+        this.codexLoading = false;
+
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            await ipcRenderer.invoke('codex-clear-history').catch(() => {});
+            await ipcRenderer.invoke('codex-set-effort', { effort: this.codexReasoningEffort }).catch(() => {});
+        }
+
         await audioprocess.initializeOpenAI(this.selectedProfile, this.selectedLanguage);
         // Pass the screenshot interval as string (including 'manual' option)
         audioprocess.startCapture(this.selectedScreenshotInterval, this.selectedImageQuality, 'openai');
@@ -390,6 +506,259 @@ export class AudioProcessApp extends LitElement {
         this.startTime = Date.now();
         this.currentView = 'assistant';
         console.log('[handleStartOpenAI] OpenAI session started - flags reset');
+    }
+
+    resetSessionState() {
+        this.sessionProvider = null;
+        this.activeSessionTab = 'realtime';
+        this.realtimeActive = false;
+        this.realtimeBusy = false;
+        this.realtimeSuspended = false;
+        this.stopCodexTimer();
+        this.codexMessages = [];
+        this.codexLoading = false;
+        this.codexPendingImage = null;
+        this.codexStatusText = '';
+        this.codexReasoningText = '';
+        this.codexErrorText = '';
+        this.codexElapsedSeconds = 0;
+        this.codexUnread = 0;
+    }
+
+    // ---- Realtime tab lifecycle ----
+
+    handleRealtimeState(payload) {
+        const state = payload?.state;
+        if (state === 'active') {
+            this.realtimeActive = true;
+            this.realtimeSuspended = false;
+            this.realtimeBusy = false;
+        } else if (state === 'suspended') {
+            this.realtimeActive = false;
+            this.realtimeSuspended = true;
+            this.realtimeBusy = false;
+        } else if (state === 'connecting') {
+            this.realtimeBusy = true;
+        } else if (state === 'error') {
+            this.realtimeActive = false;
+            this.realtimeBusy = false;
+        }
+    }
+
+    async handleSessionTabChange(tab) {
+        if (tab === this.activeSessionTab) return;
+        this.activeSessionTab = tab;
+
+        if (tab === 'codex') {
+            this.codexUnread = 0;
+            return;
+        }
+
+        // Switching back to the realtime tab transparently resumes a paused session.
+        if (tab === 'realtime' && this.realtimeSuspended && !this.realtimeBusy) {
+            await this.startRealtime();
+        }
+    }
+
+    async handleToggleRealtime() {
+        if (this.realtimeBusy) return;
+        if (this.realtimeActive) {
+            await this.stopRealtime();
+        } else {
+            await this.startRealtime();
+        }
+    }
+
+    async stopRealtime() {
+        if (!window.require || this.realtimeBusy) return;
+        this.realtimeBusy = true;
+        this.setStatus('Pausing realtime...');
+
+        try {
+            const { ipcRenderer } = window.require('electron');
+            // Suspends audio only; mediaStream stays alive so screenshots keep
+            // working and resuming never re-prompts for screen access.
+            await window.audioprocess.suspendRealtimeAudio().catch(() => {});
+            await ipcRenderer.invoke('suspend-realtime-openai').catch(() => {});
+            this.realtimeActive = false;
+            this.realtimeSuspended = true;
+            this.setStatus('Realtime paused');
+        } finally {
+            this.realtimeBusy = false;
+        }
+    }
+
+    async startRealtime() {
+        if (!window.require || this.realtimeBusy) return;
+        this.realtimeBusy = true;
+        this.setStatus('Resuming realtime...');
+
+        try {
+            const { ipcRenderer } = window.require('electron');
+            const result = await ipcRenderer.invoke('resume-realtime-openai').catch(err => ({ success: false, error: err.message }));
+
+            if (!result || !result.success) {
+                this.setStatus('Failed to resume realtime: ' + (result?.error || 'unknown error'));
+                this.realtimeActive = false;
+                return;
+            }
+
+            await window.audioprocess.resumeRealtimeAudio('openai').catch(() => {});
+            this.realtimeActive = true;
+            this.realtimeSuspended = false;
+            this.setStatus('Listening...');
+        } finally {
+            this.realtimeBusy = false;
+        }
+    }
+
+    // ---- Codex (gpt-5.5) tab ----
+
+    startCodexTimer() {
+        this.stopCodexTimer();
+        this._codexStartedAt = Date.now();
+        this.codexElapsedSeconds = 0;
+        this._codexTimer = setInterval(() => {
+            this.codexElapsedSeconds = Math.floor((Date.now() - this._codexStartedAt) / 1000);
+        }, 1000);
+    }
+
+    stopCodexTimer() {
+        if (this._codexTimer) {
+            clearInterval(this._codexTimer);
+            this._codexTimer = null;
+        }
+        this._codexStartedAt = null;
+    }
+
+    handleCodexStatus(payload) {
+        const state = payload?.state;
+        this.codexStatusText = payload?.message || '';
+
+        if (state === 'thinking') {
+            this.codexLoading = true;
+            this.codexErrorText = '';
+            this.codexReasoningText = '';
+            this.startCodexTimer();
+        } else if (state === 'streaming') {
+            this.codexLoading = true;
+        } else if (state === 'done' || state === 'aborted') {
+            this.stopCodexTimer();
+            this.codexLoading = false;
+            this.codexReasoningText = '';
+        } else if (state === 'error') {
+            this.stopCodexTimer();
+            this.codexLoading = false;
+            if (payload?.message) this.codexErrorText = payload.message;
+        }
+    }
+
+    upsertCodexMessage(message) {
+        if (!message || !message.id) return;
+
+        const index = this.codexMessages.findIndex(existing => existing.id === message.id);
+        if (index === -1) {
+            this.codexMessages = [...this.codexMessages, { timestamp: Date.now(), ...message }];
+            return;
+        }
+
+        const merged = { ...this.codexMessages[index], ...message };
+        this.codexMessages = [...this.codexMessages.slice(0, index), merged, ...this.codexMessages.slice(index + 1)];
+    }
+
+    async handleCodexSend(message) {
+        if (!window.require) return;
+        const text = (message || '').trim();
+        const imageData = this.codexPendingImage;
+        if (!text && !imageData) return;
+
+        this.codexErrorText = '';
+        this.codexPendingImage = null;
+        this.codexLoading = true;
+        this.startCodexTimer();
+
+        const { ipcRenderer } = window.require('electron');
+        const result = await ipcRenderer
+            .invoke('codex-send-message', { text, imageData, effort: this.codexReasoningEffort })
+            .catch(err => ({ success: false, error: err.message }));
+
+        if (result && !result.success && !result.aborted) {
+            this.stopCodexTimer();
+            this.codexLoading = false;
+            this.codexErrorText = result.error || 'GPT-5.5 request failed';
+        }
+    }
+
+    /** Camera button: attach a screenshot preview the user can send with a prompt. */
+    async handleCodexScreenshot() {
+        if (!window.require) return;
+        this.codexErrorText = '';
+
+        const { ipcRenderer } = window.require('electron');
+        const result = await ipcRenderer.invoke('codex-capture-screenshot').catch(err => ({ success: false, error: err.message }));
+
+        if (!result || !result.success) {
+            this.codexErrorText = result?.error || 'Screenshot capture failed';
+            return;
+        }
+        this.codexPendingImage = result.imageData;
+    }
+
+    /** Cmd/Ctrl+Enter in the chat tab: capture and send in one step. */
+    async handleCodexCaptureAndSend() {
+        if (!window.require) return;
+
+        const sessionView = this.shadowRoot?.querySelector('openai-session-view');
+        const text = sessionView?.getPendingPrompt?.() || '';
+        sessionView?.clearActiveInput?.();
+
+        this.codexErrorText = '';
+        this.codexLoading = true;
+        this.startCodexTimer();
+
+        const { ipcRenderer } = window.require('electron');
+        const result = await ipcRenderer
+            .invoke('codex-capture-and-send', { text, effort: this.codexReasoningEffort })
+            .catch(err => ({ success: false, error: err.message }));
+
+        if (result && !result.success && !result.aborted) {
+            this.stopCodexTimer();
+            this.codexLoading = false;
+            this.codexErrorText = result.error || 'GPT-5.5 request failed';
+        }
+    }
+
+    async handleCodexAbort() {
+        if (!window.require) return;
+        const { ipcRenderer } = window.require('electron');
+        await ipcRenderer.invoke('codex-abort').catch(() => {});
+    }
+
+    async handleCodexClear() {
+        if (!window.require) return;
+        const { ipcRenderer } = window.require('electron');
+        await ipcRenderer.invoke('codex-clear-history').catch(() => {});
+        this.stopCodexTimer();
+        this.codexMessages = [];
+        this.codexLoading = false;
+        this.codexPendingImage = null;
+        this.codexReasoningText = '';
+        this.codexErrorText = '';
+        this.codexUnread = 0;
+    }
+
+    async handleCodexEffortChange(effort) {
+        this.codexReasoningEffort = effort;
+        localStorage.setItem('codexReasoningEffort', effort);
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            await ipcRenderer.invoke('codex-set-effort', { effort }).catch(() => {});
+        }
+    }
+
+    /** Used by renderer.js handleShortcut to build the screenshot prompt. */
+    getActiveTabPrompt() {
+        return this.shadowRoot?.querySelector('openai-session-view')?.getPendingPrompt?.() || '';
     }
 
     async handleAPIKeyHelp() {
@@ -439,22 +808,29 @@ export class AudioProcessApp extends LitElement {
         }
     }
 
-    // Assistant view event handlers
+    // Assistant view event handlers.
+    // Routing is explicit: a failed OpenAI send must never fall through to Gemini,
+    // which is what happened whenever the realtime socket was not connected.
     async handleSendText(message) {
-        // Determine which provider to use based on which session is active
-        // For now, try OpenAI first, then fall back to Gemini
-        let result = await window.audioprocess.sendTextMessageOpenAI(message).catch(() => null);
+        const provider = this.sessionProvider || (window.audioprocess.getCurrentProvider?.() === 'openai' ? 'openai' : 'gemini');
+
+        const result =
+            provider === 'openai'
+                ? await window.audioprocess.sendTextMessageOpenAI(message).catch(err => ({ success: false, error: err.message }))
+                : await window.audioprocess.sendTextMessage(message).catch(err => ({ success: false, error: err.message }));
+
         if (!result || !result.success) {
-            result = await window.audioprocess.sendTextMessage(message);
+            if (result?.code === 'REALTIME_NOT_CONNECTED') {
+                this.setStatus('Realtime is paused - press Start realtime to resume');
+                return;
+            }
+            console.error('Failed to send message:', result?.error);
+            this.setStatus('Error sending message: ' + (result?.error || 'unknown error'));
+            return;
         }
 
-        if (!result.success) {
-            console.error('Failed to send message:', result.error);
-            this.setStatus('Error sending message: ' + result.error);
-        } else {
-            this.setStatus('Message sent...');
-            this._awaitingNewResponse = true;
-        }
+        this.setStatus('Message sent...');
+        this._awaitingNewResponse = true;
     }
 
     handleResponseIndexChanged(e) {
@@ -566,22 +942,7 @@ export class AudioProcessApp extends LitElement {
                 return html` <advanced-view></advanced-view> `;
 
             case 'assistant':
-                return html`
-                    <assistant-view
-                        .responses=${this.responses}
-                        .currentResponseIndex=${this.currentResponseIndex}
-                        .selectedProfile=${this.selectedProfile}
-                        .onSendText=${message => this.handleSendText(message)}
-                        .shouldAnimateResponse=${this.shouldAnimateResponse}
-                        @response-index-changed=${this.handleResponseIndexChanged}
-                        @response-animation-complete=${() => {
-                            this.shouldAnimateResponse = false;
-                            this._currentResponseIsComplete = true;
-                            console.log('[response-animation-complete] Marked current response as complete');
-                            this.requestUpdate();
-                        }}
-                    ></assistant-view>
-                `;
+                return this.sessionProvider === 'openai' ? this.renderOpenAISessionView() : this.renderAssistantView();
 
             case 'chat':
                 return html` <chat-view></chat-view> `;
@@ -589,6 +950,65 @@ export class AudioProcessApp extends LitElement {
             default:
                 return html`<div>Unknown view: ${this.currentView}</div>`;
         }
+    }
+
+    handleResponseAnimationComplete() {
+        this.shouldAnimateResponse = false;
+        this._currentResponseIsComplete = true;
+        console.log('[response-animation-complete] Marked current response as complete');
+        this.requestUpdate();
+    }
+
+    // Gemini sessions keep the single-pane assistant view unchanged.
+    renderAssistantView() {
+        return html`
+            <assistant-view
+                .responses=${this.responses}
+                .currentResponseIndex=${this.currentResponseIndex}
+                .selectedProfile=${this.selectedProfile}
+                .onSendText=${message => this.handleSendText(message)}
+                .shouldAnimateResponse=${this.shouldAnimateResponse}
+                @response-index-changed=${this.handleResponseIndexChanged}
+                @response-animation-complete=${() => this.handleResponseAnimationComplete()}
+            ></assistant-view>
+        `;
+    }
+
+    renderOpenAISessionView() {
+        return html`
+            <openai-session-view
+                .activeTab=${this.activeSessionTab}
+                ?isClickThrough=${this._isClickThrough}
+                ?compact=${this.layoutMode === 'compact'}
+                .responses=${this.responses}
+                .currentResponseIndex=${this.currentResponseIndex}
+                .selectedProfile=${this.selectedProfile}
+                .shouldAnimateResponse=${this.shouldAnimateResponse}
+                .realtimeActive=${this.realtimeActive}
+                .realtimeBusy=${this.realtimeBusy}
+                .codexMessages=${this.codexMessages}
+                .codexLoading=${this.codexLoading}
+                .codexPendingImage=${this.codexPendingImage}
+                .codexReasoningEffort=${this.codexReasoningEffort}
+                .codexReasoningText=${this.codexReasoningText}
+                .codexErrorText=${this.codexErrorText}
+                .codexElapsedSeconds=${this.codexElapsedSeconds}
+                .codexUnread=${this.codexUnread}
+                .onTabChange=${tab => this.handleSessionTabChange(tab)}
+                .onToggleRealtime=${() => this.handleToggleRealtime()}
+                .onSendRealtimeText=${message => this.handleSendText(message)}
+                .onResponseIndexChanged=${e => this.handleResponseIndexChanged(e)}
+                .onCodexSend=${message => this.handleCodexSend(message)}
+                .onCodexScreenshot=${() => this.handleCodexScreenshot()}
+                .onCodexRemoveImage=${() => {
+                    this.codexPendingImage = null;
+                }}
+                .onCodexClear=${() => this.handleCodexClear()}
+                .onCodexAbort=${() => this.handleCodexAbort()}
+                .onCodexEffortChange=${effort => this.handleCodexEffortChange(effort)}
+                @response-animation-complete=${() => this.handleResponseAnimationComplete()}
+            ></openai-session-view>
+        `;
     }
 
     handleStartChat() {
@@ -600,8 +1020,8 @@ export class AudioProcessApp extends LitElement {
             this.currentView === 'assistant' || this.currentView === 'chat'
                 ? 'assistant-view'
                 : this.currentView === 'onboarding'
-                ? 'onboarding-view'
-                : 'with-border'
+                  ? 'onboarding-view'
+                  : 'with-border'
         }`;
 
         return html`
@@ -619,6 +1039,11 @@ export class AudioProcessApp extends LitElement {
                         .onCloseClick=${() => this.handleClose()}
                         .onBackClick=${() => this.handleBackClick()}
                         .onHideToggleClick=${() => this.handleHideToggle()}
+                        .sessionProvider=${this.sessionProvider}
+                        .sessionTab=${this.activeSessionTab}
+                        .realtimeActive=${this.realtimeActive}
+                        .codexLoading=${this.codexLoading}
+                        .codexReasoningEffort=${this.codexReasoningEffort}
                         ?isClickThrough=${this._isClickThrough}
                     ></app-header>
                     <div class="${mainContentClass}">

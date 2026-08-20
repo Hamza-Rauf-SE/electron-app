@@ -101,6 +101,11 @@ export class AppHeader extends LitElement {
         isClickThrough: { type: Boolean, reflect: true },
         advancedMode: { type: Boolean },
         onAdvancedClick: { type: Function },
+        sessionProvider: { type: String },
+        sessionTab: { type: String },
+        realtimeActive: { type: Boolean },
+        codexLoading: { type: Boolean },
+        codexReasoningEffort: { type: String },
     };
 
     constructor() {
@@ -117,6 +122,11 @@ export class AppHeader extends LitElement {
         this.isClickThrough = false;
         this.advancedMode = false;
         this.onAdvancedClick = () => {};
+        this.sessionProvider = null;
+        this.sessionTab = 'realtime';
+        this.realtimeActive = false;
+        this.codexLoading = false;
+        this.codexReasoningEffort = 'high';
         this._timerInterval = null;
     }
 
@@ -181,8 +191,29 @@ export class AppHeader extends LitElement {
             history: 'Conversation History',
             advanced: 'Advanced Tools',
             assistant: 'System Audio Service',
+            chat: 'Chat',
         };
         return titles[this.currentView] || 'System Audio Service';
+    }
+
+    /**
+     * The status row is per-tab: elapsed time is a realtime metric, so the chat
+     * tab shows the model and its thinking state instead.
+     */
+    renderSessionStatus(elapsedTime) {
+        if (this.sessionProvider === 'openai' && this.sessionTab === 'codex') {
+            return html`
+                <span>GPT-5.5 · ${this.codexReasoningEffort}</span>
+                <span>${this.codexLoading ? 'Thinking...' : ''}</span>
+            `;
+        }
+
+        const statusLabel = this.sessionProvider === 'openai' && !this.realtimeActive ? 'Realtime paused' : this.statusText;
+
+        return html`
+            <span>${elapsedTime}</span>
+            <span>${statusLabel}</span>
+        `;
     }
 
     getElapsedTime() {
@@ -205,12 +236,7 @@ export class AppHeader extends LitElement {
             <div class="header">
                 <div class="header-title">${this.getViewTitle()}</div>
                 <div class="header-actions">
-                    ${this.currentView === 'assistant'
-                        ? html`
-                              <span>${elapsedTime}</span>
-                              <span>${this.statusText}</span>
-                          `
-                        : ''}
+                    ${this.currentView === 'assistant' ? this.renderSessionStatus(elapsedTime) : ''}
                     ${this.currentView === 'main'
                         ? html`
                               <button class="icon-button" @click=${this.onHistoryClick}>

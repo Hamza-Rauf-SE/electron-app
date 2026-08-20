@@ -574,8 +574,14 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
                     targetWidth = baseWidth;
                     targetHeight = layoutMode === 'compact' ? 600 : 700;
                     break;
+                case 'assistant': {
+                    // Only the two-tab OpenAI session is taller; Gemini keeps its size.
+                    const sessionProvider = await event.sender.executeJavaScript('audioprocess.element()?.sessionProvider').catch(() => null);
+                    targetWidth = baseWidth;
+                    targetHeight = sessionProvider === 'openai' ? (layoutMode === 'compact' ? 560 : 680) : baseHeight;
+                    break;
+                }
                 case 'main':
-                case 'assistant':
                 case 'onboarding':
                 default:
                     targetWidth = baseWidth;

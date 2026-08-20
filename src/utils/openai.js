@@ -1,6 +1,5 @@
 const WebSocket = require('ws');
 const { BrowserWindow, ipcMain } = require('electron');
-const OpenAI = require('openai');
 const { getSystemPrompt } = require('./prompts');
 const {
     killExistingSystemAudioDump,
@@ -8,9 +7,11 @@ const {
     convertStereoToMono,
     stopMacOSAudioCapture: stopSharedMacOSAudioCapture,
 } = require('./audioCapture');
+const { setupOpenAICodexIpcHandlers, resetCodexState, abortCodexStream } = require('./openaiCodex');
 
 const OPENAI_REALTIME_MODEL = 'gpt-realtime-1.5';
-const OPENAI_CODEX_MODEL = 'gpt-5.1-codex-max';
+// How many prior turns to replay into a freshly reconnected realtime conversation.
+const REALTIME_REPLAY_TURNS = 4;
 
 // Conversation tracking variables
 let currentSessionId = null;
@@ -26,86 +27,14 @@ let messageBuffer = '';
 let openaiWebSocket = null;
 let openaiSessionRef = { current: null };
 
-function buildScreenshotAssistantPrompt(userPrompt) {
-    const basePrompt = `You are analyzing a user-provided screenshot.
-
-PRIMARY GOAL:
-- If the screenshot contains a question (including MCQ, coding prompt, interview question, error dialog asking what to do, etc.), answer that question directly.
-
-INSTRUCTIONS:
-- First, read/identify the exact question(s) visible in the screenshot.
-- Answer the question(s) with a complete, usable final answer.
-- If it is a coding question: provide (1) a very short approach (max 3–6 bullets) then (2) the full code solution.
-- If it is an MCQ: output the correct choice and a 1–2 sentence justification.
-- If there is no clear question in the screenshot: briefly describe what’s on screen and point out the most important details.
-
-OUTPUT:
-- Respond in markdown.
-- Do not add meta commentary like “I see a screenshot…” or “I will OCR…”. Just answer.
-`;
-
-    const trimmedUserPrompt = typeof userPrompt === 'string' ? userPrompt.trim() : '';
-    if (!trimmedUserPrompt) return basePrompt;
-
-    return `${basePrompt}\nUser request (optional):\n${trimmedUserPrompt}`;
-}
-
-function buildCodexChatPrompt(text) {
-    const recentHistory = conversationHistory
-        .slice(-8)
-        .map((turn, index) => [`Turn ${index + 1}:`, `User/audio transcript: ${turn.transcription}`, `Assistant: ${turn.ai_response}`].join('\n'))
-        .join('\n\n');
-
-    const historySection = recentHistory ? `RECENT CONTEXT:\n${recentHistory}\n\n` : '';
-
-    return `${currentOpenAISystemPrompt || 'You are a helpful real-time assistant. Respond clearly and directly in markdown.'}
-
-${historySection}USER CHAT MESSAGE:
-${text.trim()}`;
-}
-
-function extractOpenAIResponseText(result, fallbackText = 'No response available') {
-    if (result?.output_text) {
-        return result.output_text;
-    }
-
-    if (result?.text) {
-        return result.text;
-    }
-
-    if (typeof result === 'string') {
-        return result;
-    }
-
-    if (!Array.isArray(result?.output)) {
-        return fallbackText;
-    }
-
-    const textParts = [];
-
-    for (const outputItem of result.output) {
-        if (typeof outputItem === 'string') {
-            textParts.push(outputItem);
-            continue;
-        }
-
-        if (outputItem?.text) {
-            textParts.push(outputItem.text);
-        }
-
-        if (Array.isArray(outputItem?.content)) {
-            for (const contentPart of outputItem.content) {
-                if (contentPart?.text) {
-                    textParts.push(contentPart.text);
-                } else if (typeof contentPart === 'string') {
-                    textParts.push(contentPart);
-                }
-            }
-        }
-    }
-
-    return textParts.join('\n').trim() || fallbackText;
-}
+// Realtime lifecycle state. realtimeConfig must survive a socket close so the
+// session can be suspended (Chat tab) and resumed without losing the session.
+let realtimeConfig = null; // { apiKey, customPrompt, profile, language, systemPrompt }
+let realtimeSuspended = false;
+let realtimeAudioActive = false; // did we start SystemAudioDump?
+let realtimeResponseActive = false; // a response is currently generating on the socket
+let pendingRealtimeUserText = ''; // typed/image prompt awaiting a reply, for saveConversationTurn
+let realtimeTransition = null; // serializes suspend/resume against the shared audio process
 
 async function getOpenAIApiKeyFromStorage() {
     if (currentOpenAIApiKey) {
@@ -168,52 +97,74 @@ function getCurrentSessionData() {
     };
 }
 
-// Convert Float32Array to PCM16 for OpenAI (24kHz, mono)
-function convertFloat32ToPCM16(float32Array) {
-    const buffer = new ArrayBuffer(float32Array.length * 2);
-    const view = new DataView(buffer);
-    let offset = 0;
-    for (let i = 0; i < float32Array.length; i++, offset += 2) {
-        let s = Math.max(-1, Math.min(1, float32Array[i]));
-        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+function getRealtimeState() {
+    return {
+        connected: !!openaiSessionRef.current && openaiSessionRef.current.readyState === WebSocket.OPEN,
+        suspended: realtimeSuspended,
+        hasConfig: !!(realtimeConfig && realtimeConfig.apiKey),
+        audioActive: realtimeAudioActive,
+    };
+}
+
+/**
+ * The realtime conversation lives on OpenAI's side and is lost when the socket
+ * closes, even though conversationHistory survives locally. Replaying the last
+ * few turns gives a resumed session approximate continuity.
+ */
+function replayConversationContext(ws) {
+    const turns = conversationHistory.slice(-REALTIME_REPLAY_TURNS);
+    if (turns.length === 0) return;
+
+    console.log(`Replaying ${turns.length} prior turn(s) into resumed realtime session`);
+
+    for (const turn of turns) {
+        if (turn.transcription) {
+            ws.send(
+                JSON.stringify({
+                    type: 'conversation.item.create',
+                    item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: turn.transcription }] },
+                })
+            );
+        }
+        if (turn.ai_response) {
+            ws.send(
+                JSON.stringify({
+                    type: 'conversation.item.create',
+                    item: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: turn.ai_response }] },
+                })
+            );
+        }
     }
-    return buffer;
 }
 
-// Convert PCM16 ArrayBuffer to base64 (Node.js version using Buffer)
-function arrayBufferToBase64(buffer) {
-    if (Buffer.isBuffer(buffer)) {
-        return buffer.toString('base64');
-    }
-    return Buffer.from(buffer).toString('base64');
-}
-
-// Convert Buffer to base64 (Node.js)
-function bufferToBase64(buffer) {
-    return buffer.toString('base64');
-}
-
-async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'interview', language = 'en-US') {
+async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'interview', language = 'en-US', options = {}) {
     if (isInitializingSession) {
         console.log('OpenAI session initialization already in progress');
         return false;
     }
 
+    const { preserveConversation = false } = options;
+
     isInitializingSession = true;
     sendToRenderer('session-initializing', true);
 
-    // Initialize new conversation session
-    initializeNewSession();
+    // A resume must keep the existing session id and history.
+    if (!preserveConversation) {
+        initializeNewSession();
+    }
 
     const systemPrompt = getSystemPrompt(profile, customPrompt, false); // OpenAI doesn't support Google Search
-    currentOpenAIApiKey = typeof apiKey === 'string' ? apiKey.trim() : null;
+    const trimmedKey = typeof apiKey === 'string' ? apiKey.trim() : null;
+
+    realtimeConfig = { apiKey: trimmedKey, customPrompt, profile, language, systemPrompt };
+    currentOpenAIApiKey = trimmedKey;
     currentOpenAISystemPrompt = systemPrompt;
 
     try {
         const url = `wss://api.openai.com/v1/realtime?model=${OPENAI_REALTIME_MODEL}`;
         openaiWebSocket = new WebSocket(url, {
             headers: {
-                Authorization: `Bearer ${apiKey}`,
+                Authorization: `Bearer ${trimmedKey}`,
             },
         });
 
@@ -221,35 +172,39 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
             console.log('Connected to OpenAI Realtime API');
             sendToRenderer('update-status', 'OpenAI session connected');
 
-            // Update session configuration
-            // Note: output_modalities is set to ['text'] to receive only text responses
-            // Audio input is enabled to listen to user's audio
-            // When using text-only output, we should NOT include audio.output config
-            // However, if audio.output is included, it requires rate parameter
+            // Text-only output: omit audio.output entirely (including it would
+            // require a rate parameter and produce spoken responses).
             const sessionUpdateEvent = {
                 type: 'session.update',
                 session: {
                     type: 'realtime',
                     model: OPENAI_REALTIME_MODEL,
-                    output_modalities: ['text'], // Text output only - no audio responses
+                    output_modalities: ['text'],
                     audio: {
                         input: {
                             format: {
                                 type: 'audio/pcm',
                                 rate: 24000,
                             },
+                            // No input transcription: the realtime tab only surfaces
+                            // the model's answers, so paying to transcribe the
+                            // incoming audio would buy nothing.
                             turn_detection: {
-                                type: 'semantic_vad', // Voice activity detection - automatically detects when user speaks
+                                type: 'semantic_vad',
                             },
                         },
-                        // Remove audio.output when using text-only output
-                        // The API will generate text responses instead of audio
                     },
                     instructions: systemPrompt,
                 },
             };
 
             openaiWebSocket.send(JSON.stringify(sessionUpdateEvent));
+
+            if (preserveConversation) {
+                replayConversationContext(openaiWebSocket);
+            }
+
+            sendToRenderer('realtime-state', { state: 'active', audioActive: realtimeAudioActive });
         });
 
         openaiWebSocket.on('message', function incoming(message) {
@@ -257,7 +212,6 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
                 const event = JSON.parse(message.toString());
                 console.log('OpenAI event:', event.type);
 
-                // Handle session events
                 if (event.type === 'session.created') {
                     console.log('OpenAI session created');
                 } else if (event.type === 'session.updated') {
@@ -280,40 +234,30 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
                 // Handle response events
                 if (event.type === 'response.created') {
                     messageBuffer = '';
+                    realtimeResponseActive = true;
                 } else if (event.type === 'response.output_text.delta') {
-                    // Text output delta - buffer but don't display until complete
+                    // Buffer deltas; the UI shows the response once it is complete.
                     const delta = event.delta;
                     if (delta) {
                         messageBuffer += delta;
-                        // Don't send update-response here - wait for complete response
                     }
                 } else if (event.type === 'response.output_text.done') {
-                    // Text output is complete - send the full response now
+                    // Sole emitter for realtime responses.
+                    if (event.text) {
+                        messageBuffer = event.text;
+                    }
                     sendToRenderer('update-response', { text: messageBuffer, animate: false });
                 } else if (event.type === 'response.done') {
-                    // Extract text from response if available in the output
-                    if (event.response && event.response.output) {
-                        for (const outputItem of event.response.output) {
-                            if (outputItem.type === 'message' && outputItem.content) {
-                                for (const contentPart of outputItem.content) {
-                                    if (contentPart.type === 'text' && contentPart.text) {
-                                        messageBuffer = contentPart.text;
-                                        sendToRenderer('update-response', { text: messageBuffer, animate: false });
-                                    }
-                                }
-                            }
+                    realtimeResponseActive = false;
+
+                    // Fall back to the buffer if output_text.done never arrived.
+                    if (messageBuffer) {
+                        const turnInput = currentTranscription.trim() || pendingRealtimeUserText;
+                        if (turnInput) {
+                            saveConversationTurn(turnInput, messageBuffer);
+                            currentTranscription = '';
+                            pendingRealtimeUserText = '';
                         }
-                    }
-
-                    // If we still have buffered text but didn't get it from response.output, use the buffer
-                    if (messageBuffer && !event.response?.output) {
-                        sendToRenderer('update-response', { text: messageBuffer, animate: false });
-                    }
-
-                    // Save conversation turn when we have both transcription and AI response
-                    if (currentTranscription && messageBuffer) {
-                        saveConversationTurn(currentTranscription, messageBuffer);
-                        currentTranscription = '';
                     }
 
                     messageBuffer = '';
@@ -321,10 +265,10 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
                     sendToRenderer('update-status', 'Listening...');
                 }
 
-                // Handle errors
                 if (event.type === 'error') {
                     console.error('OpenAI error:', event);
-                    sendToRenderer('update-status', `Error: ${event.message || 'Unknown error'}`);
+                    realtimeResponseActive = false;
+                    sendToRenderer('update-status', `Error: ${event.error?.message || event.message || 'Unknown error'}`);
                 }
             } catch (error) {
                 console.error('Error parsing OpenAI message:', error);
@@ -340,13 +284,21 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
 
         openaiWebSocket.on('close', function close(code, reason) {
             console.log('OpenAI WebSocket closed:', code, reason);
-            sendToRenderer('update-status', 'OpenAI session closed');
             openaiWebSocket = null;
             openaiSessionRef.current = null;
-            currentOpenAIApiKey = null;
-            currentOpenAISystemPrompt = '';
+            realtimeResponseActive = false;
             isInitializingSession = false;
             sendToRenderer('session-initializing', false);
+
+            // realtimeConfig / currentOpenAIApiKey / currentOpenAISystemPrompt are
+            // intentionally retained so the session can be resumed. Only
+            // close-openai-session clears them.
+            if (realtimeSuspended) {
+                sendToRenderer('realtime-state', { state: 'suspended', audioActive: false });
+            } else {
+                sendToRenderer('update-status', 'OpenAI session closed');
+                sendToRenderer('realtime-state', { state: 'error', audioActive: false });
+            }
         });
 
         openaiSessionRef.current = openaiWebSocket;
@@ -355,71 +307,93 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
         return true;
     } catch (error) {
         console.error('Failed to initialize OpenAI session:', error);
-        currentOpenAIApiKey = null;
-        currentOpenAISystemPrompt = '';
         isInitializingSession = false;
         sendToRenderer('session-initializing', false);
+        sendToRenderer('realtime-state', { state: 'error', audioActive: realtimeAudioActive });
         return false;
     }
 }
 
-async function startMacOSAudioCapture(openaiSessionRef) {
-    return startSharedMacOSAudioCapture({
+async function startMacOSAudioCapture(sessionRef) {
+    const started = await startSharedMacOSAudioCapture({
         label: 'macOS audio capture for OpenAI',
         sendToRenderer,
-        sendAudioChunk: base64Data => sendAudioToOpenAI(base64Data, openaiSessionRef),
+        sendAudioChunk: base64Data => sendAudioToOpenAI(base64Data, sessionRef),
     });
+    realtimeAudioActive = !!started;
+    return started;
 }
 
 function stopMacOSAudioCapture() {
     stopSharedMacOSAudioCapture();
+    realtimeAudioActive = false;
 }
 
-async function sendAudioToOpenAI(base64Data, openaiSessionRef) {
-    if (!openaiSessionRef.current || openaiSessionRef.current.readyState !== WebSocket.OPEN) return;
+async function sendAudioToOpenAI(base64Data, sessionRef) {
+    if (!sessionRef.current || sessionRef.current.readyState !== WebSocket.OPEN) return;
 
     try {
         if (process.stdout && process.stdout.writable) {
             process.stdout.write('.');
         }
 
-        // Send audio using input_audio_buffer.append event
         const event = {
             type: 'input_audio_buffer.append',
             audio: base64Data,
         };
 
-        openaiSessionRef.current.send(JSON.stringify(event));
+        sessionRef.current.send(JSON.stringify(event));
     } catch (error) {
         console.error('Error sending audio to OpenAI:', error);
     }
 }
 
-function setupOpenAIIpcHandlers(openaiSessionRef) {
-    global.openaiSessionRef = openaiSessionRef;
+/**
+ * Queues a user message (text and/or image) on the realtime socket and asks for
+ * a response. With semantic_vad an audio turn may already be generating, and a
+ * second response.create would be rejected, so cancel it first.
+ */
+function sendRealtimeUserMessage(ws, content, statusText, turnLabel) {
+    if (realtimeResponseActive) {
+        ws.send(JSON.stringify({ type: 'response.cancel' }));
+        realtimeResponseActive = false;
+    }
+
+    ws.send(
+        JSON.stringify({
+            type: 'conversation.item.create',
+            item: { type: 'message', role: 'user', content },
+        })
+    );
+    ws.send(JSON.stringify({ type: 'response.create' }));
+
+    pendingRealtimeUserText = turnLabel;
+    sendToRenderer('update-status', statusText);
+}
+
+function setupOpenAIIpcHandlers(sessionRef) {
+    openaiSessionRef = sessionRef;
+    global.openaiSessionRef = sessionRef;
 
     ipcMain.handle('initialize-openai', async (event, apiKey, customPrompt, profile = 'interview', language = 'en-US') => {
+        realtimeSuspended = false;
         const success = await initializeOpenAISession(apiKey, customPrompt, profile, language);
         if (success) {
-            openaiSessionRef.current = openaiWebSocket;
+            sessionRef.current = openaiWebSocket;
             return true;
         }
         return false;
     });
 
     ipcMain.handle('send-audio-content-openai', async (event, { data, mimeType }) => {
-        if (!openaiSessionRef.current || openaiSessionRef.current.readyState !== WebSocket.OPEN) {
+        if (!sessionRef.current || sessionRef.current.readyState !== WebSocket.OPEN) {
             return { success: false, error: 'No active OpenAI session' };
         }
         try {
             if (process.stdout && process.stdout.writable) {
                 process.stdout.write('.');
             }
-            const event = {
-                type: 'input_audio_buffer.append',
-                audio: data,
-            };
-            openaiSessionRef.current.send(JSON.stringify(event));
+            sessionRef.current.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: data }));
             return { success: true };
         } catch (error) {
             console.error('Error sending system audio to OpenAI:', error);
@@ -428,18 +402,14 @@ function setupOpenAIIpcHandlers(openaiSessionRef) {
     });
 
     ipcMain.handle('send-mic-audio-content-openai', async (event, { data, mimeType }) => {
-        if (!openaiSessionRef.current || openaiSessionRef.current.readyState !== WebSocket.OPEN) {
+        if (!sessionRef.current || sessionRef.current.readyState !== WebSocket.OPEN) {
             return { success: false, error: 'No active OpenAI session' };
         }
         try {
             if (process.stdout && process.stdout.writable) {
                 process.stdout.write(',');
             }
-            const event = {
-                type: 'input_audio_buffer.append',
-                audio: data,
-            };
-            openaiSessionRef.current.send(JSON.stringify(event));
+            sessionRef.current.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: data }));
             return { success: true };
         } catch (error) {
             console.error('Error sending mic audio to OpenAI:', error);
@@ -447,127 +417,58 @@ function setupOpenAIIpcHandlers(openaiSessionRef) {
         }
     });
 
-    ipcMain.handle('send-image-content-openai', async (event, { data, debug, prompt }) => {
-        // For OpenAI sessions, use Codex for screenshot analysis instead of Realtime API.
-        console.log('[DEBUG] send-image-content-openai called');
+    // Tab 1: screenshots go to the realtime model, not a separate REST model.
+    ipcMain.handle('send-image-content-openai', async (event, { data, prompt } = {}) => {
+        const ws = sessionRef.current;
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            return { success: false, error: 'Realtime session is not connected', code: 'REALTIME_NOT_CONNECTED' };
+        }
+
+        if (!data || typeof data !== 'string' || data.length < 100) {
+            console.error('Invalid image data for realtime send, length:', data?.length);
+            return { success: false, error: 'Invalid image data' };
+        }
+
         try {
-            if (!data || typeof data !== 'string') {
-                console.error('[DEBUG] Invalid image data received, type:', typeof data, 'length:', data?.length);
-                return { success: false, error: 'Invalid image data' };
+            const trimmedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
+            const content = [];
+            if (trimmedPrompt) {
+                content.push({ type: 'input_text', text: trimmedPrompt });
             }
-            console.log('[DEBUG] Image data received, length:', data.length, 'characters');
+            content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${data}`, detail: 'auto' });
 
-            console.log('[DEBUG] Getting OpenAI API key...');
-            const apiKey = await getOpenAIApiKeyFromStorage();
-
-            if (!apiKey) {
-                console.error('[DEBUG] OpenAI API key not found');
-                return { success: false, error: 'OpenAI API key not found' };
-            }
-            console.log('[DEBUG] API key retrieved, length:', apiKey.length);
-
-            const openai = new OpenAI({
-                apiKey: apiKey.trim(),
-            });
-
-            // Use Codex for screenshot analysis
-            const analysisPrompt = buildScreenshotAssistantPrompt(prompt);
-            console.log('[DEBUG] Using prompt:', analysisPrompt);
-            console.log(`[DEBUG] Sending request to ${OPENAI_CODEX_MODEL}...`);
-
-            const result = await openai.responses.create({
-                model: OPENAI_CODEX_MODEL,
-                input: [
-                    {
-                        role: 'user',
-                        content: [
-                            {
-                                type: 'input_text',
-                                text: analysisPrompt,
-                            },
-                            {
-                                type: 'input_image',
-                                image_url: `data:image/jpeg;base64,${data}`,
-                            },
-                        ],
-                    },
-                ],
-            });
-
-            console.log('[DEBUG] Codex API response received:', JSON.stringify(result, null, 2));
-
-            console.log('[DEBUG] Extracting text from response...');
-            const analysisText = extractOpenAIResponseText(result, 'No analysis available');
-
-            console.log('[DEBUG] Codex analysis result length:', analysisText.length);
-            console.log('[DEBUG] Codex analysis result preview:', analysisText.substring(0, 100) + '...');
-
-            // Send the analysis result back to the renderer
-            console.log('[DEBUG] Sending analysis to renderer...');
-            sendToRenderer('update-response', { text: analysisText, animate: false });
-            sendToRenderer('response-complete', true);
-            sendToRenderer('update-status', 'Screenshot analyzed');
-            console.log('[DEBUG] Analysis sent to renderer successfully');
+            sendRealtimeUserMessage(ws, content, 'Analyzing screenshot...', trimmedPrompt || '[screenshot]');
 
             if (process.stdout && process.stdout.writable) {
                 process.stdout.write('!');
             }
 
-            return { success: true, analysis: analysisText };
+            return { success: true };
         } catch (error) {
-            console.error('Error analyzing screenshot with Codex:', error);
+            console.error('Error sending image to OpenAI realtime:', error);
             return { success: false, error: error.message };
         }
     });
 
+    // Tab 1: typed text goes to the realtime model.
     ipcMain.handle('send-text-message-openai', async (event, text) => {
-        if (!openaiSessionRef.current || openaiSessionRef.current.readyState !== WebSocket.OPEN) {
-            return { success: false, error: 'No active OpenAI session' };
+        const ws = sessionRef.current;
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            return { success: false, error: 'Realtime session is not connected', code: 'REALTIME_NOT_CONNECTED' };
+        }
+
+        if (!text || typeof text !== 'string' || text.trim().length === 0) {
+            return { success: false, error: 'Invalid text message' };
         }
 
         try {
-            if (!text || typeof text !== 'string' || text.trim().length === 0) {
-                return { success: false, error: 'Invalid text message' };
-            }
-
-            const apiKey = await getOpenAIApiKeyFromStorage();
-            if (!apiKey) {
-                return { success: false, error: 'OpenAI API key not found' };
-            }
-
-            console.log(`Sending chat message to ${OPENAI_CODEX_MODEL}:`, text);
-            sendToRenderer('update-status', 'Thinking with Codex...');
-
-            const openai = new OpenAI({
-                apiKey,
-            });
-
-            const codexPrompt = buildCodexChatPrompt(text);
-            const result = await openai.responses.create({
-                model: OPENAI_CODEX_MODEL,
-                input: [
-                    {
-                        role: 'user',
-                        content: [
-                            {
-                                type: 'input_text',
-                                text: codexPrompt,
-                            },
-                        ],
-                    },
-                ],
-            });
-
-            const responseText = extractOpenAIResponseText(result);
-            sendToRenderer('update-response', { text: responseText, animate: false });
-            sendToRenderer('response-complete', true);
-            sendToRenderer('update-status', 'Listening...');
-            saveConversationTurn(text, responseText);
-
-            return { success: true, response: responseText };
+            const trimmed = text.trim();
+            console.log('Sending text to OpenAI realtime:', trimmed);
+            sendRealtimeUserMessage(ws, [{ type: 'input_text', text: trimmed }], 'Thinking...', trimmed);
+            return { success: true };
         } catch (error) {
-            console.error('Error sending text to Codex:', error);
-            sendToRenderer('update-status', `Error: ${error.message || 'Codex chat failed'}`);
+            console.error('Error sending text to OpenAI realtime:', error);
+            sendToRenderer('update-status', `Error: ${error.message || 'Realtime send failed'}`);
             return { success: false, error: error.message };
         }
     });
@@ -581,7 +482,7 @@ function setupOpenAIIpcHandlers(openaiSessionRef) {
         }
 
         try {
-            const success = await startMacOSAudioCapture(openaiSessionRef);
+            const success = await startMacOSAudioCapture(sessionRef);
             return { success };
         } catch (error) {
             console.error('Error starting macOS audio capture for OpenAI:', error);
@@ -599,17 +500,105 @@ function setupOpenAIIpcHandlers(openaiSessionRef) {
         }
     });
 
-    ipcMain.handle('close-openai-session', async event => {
-        try {
+    // Pauses the realtime model without tearing down the renderer's screen
+    // capture, so resuming never re-prompts for screen access.
+    ipcMain.handle('suspend-realtime-openai', async () => {
+        if (realtimeTransition) {
+            await realtimeTransition.catch(() => {});
+        }
+
+        realtimeTransition = (async () => {
+            realtimeSuspended = true;
+
+            // Idempotent: the renderer's suspendRealtimeAudio() also stops this.
             stopMacOSAudioCapture();
 
-            if (openaiSessionRef.current) {
-                openaiSessionRef.current.close();
-                openaiSessionRef.current = null;
+            const ws = sessionRef.current;
+            if (ws) {
+                try {
+                    ws.close(1000, 'suspended');
+                } catch (error) {
+                    console.warn('Failed to close realtime socket:', error.message);
+                }
+            }
+            sessionRef.current = null;
+            openaiWebSocket = null;
+            realtimeResponseActive = false;
+
+            sendToRenderer('realtime-state', { state: 'suspended', audioActive: false });
+            sendToRenderer('update-status', 'Realtime paused');
+            return { success: true };
+        })();
+
+        return realtimeTransition;
+    });
+
+    ipcMain.handle('resume-realtime-openai', async () => {
+        if (realtimeTransition) {
+            await realtimeTransition.catch(() => {});
+        }
+
+        realtimeTransition = (async () => {
+            if (sessionRef.current && sessionRef.current.readyState === WebSocket.OPEN) {
+                realtimeSuspended = false;
+                return { success: true, alreadyOpen: true };
+            }
+
+            if (!realtimeConfig || !realtimeConfig.apiKey) {
+                return { success: false, error: 'No realtime session to resume', code: 'NO_CONFIG' };
+            }
+
+            sendToRenderer('realtime-state', { state: 'connecting', audioActive: false });
+
+            realtimeSuspended = false;
+
+            const started = await initializeOpenAISession(
+                realtimeConfig.apiKey,
+                realtimeConfig.customPrompt,
+                realtimeConfig.profile,
+                realtimeConfig.language,
+                { preserveConversation: true }
+            );
+
+            if (!started) {
+                realtimeSuspended = true;
+                sendToRenderer('realtime-state', { state: 'error', audioActive: false });
+                return { success: false, error: 'Failed to reconnect realtime session' };
+            }
+
+            sessionRef.current = openaiWebSocket;
+
+            // Audio is restarted by the renderer via start-macos-audio-openai.
+            sendToRenderer('realtime-state', { state: 'active', audioActive: realtimeAudioActive });
+            return { success: true };
+        })();
+
+        return realtimeTransition;
+    });
+
+    ipcMain.handle('get-realtime-openai-state', async () => {
+        return { success: true, state: getRealtimeState() };
+    });
+
+    ipcMain.handle('close-openai-session', async event => {
+        try {
+            abortCodexStream();
+            stopMacOSAudioCapture();
+
+            if (sessionRef.current) {
+                sessionRef.current.close();
+                sessionRef.current = null;
                 openaiWebSocket = null;
             }
+
+            realtimeSuspended = false;
+            realtimeAudioActive = false;
+            realtimeResponseActive = false;
+            realtimeConfig = null;
+            pendingRealtimeUserText = '';
             currentOpenAIApiKey = null;
             currentOpenAISystemPrompt = '';
+            resetCodexState();
 
             return { success: true };
         } catch (error) {
@@ -636,6 +625,13 @@ function setupOpenAIIpcHandlers(openaiSessionRef) {
             return { success: false, error: error.message };
         }
     });
+
+    // Tab 2 (gpt-5.5) lives in its own module and shares only the key and prompt.
+    setupOpenAICodexIpcHandlers({
+        sendToRenderer,
+        getApiKey: getOpenAIApiKeyFromStorage,
+        getSystemPrompt: () => currentOpenAISystemPrompt || realtimeConfig?.systemPrompt || '',
+    });
 }
 
 module.exports = {
@@ -644,6 +640,7 @@ module.exports = {
     initializeNewSession,
     saveConversationTurn,
     getCurrentSessionData,
+    getRealtimeState,
     killExistingSystemAudioDump,
     startMacOSAudioCapture,
     convertStereoToMono,

@@ -1,6 +1,7 @@
 const { GoogleGenAI } = require('@google/genai');
 const { BrowserWindow, ipcMain } = require('electron');
 const { getSystemPrompt } = require('./prompts');
+const { captureScreenJpegBase64 } = require('./screenCapture');
 const {
     killExistingSystemAudioDump,
     startMacOSAudioCapture: startSharedMacOSAudioCapture,
@@ -683,40 +684,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     });
 
     ipcMain.handle('capture-screenshot-for-chat', async event => {
-        try {
-            const { desktopCapturer, screen } = require('electron');
-
-            // Get the primary display for accurate dimensions
-            const primaryDisplay = screen.getPrimaryDisplay();
-            const { width, height } = primaryDisplay.size;
-
-            // Use silent capture with maximum stealth
-            const sources = await desktopCapturer.getSources({
-                types: ['screen'],
-                thumbnailSize: { width: Math.min(width, 1920), height: Math.min(height, 1080) },
-                fetchWindowIcons: false, // Disable window icons for speed and stealth
-            });
-
-            if (sources.length > 0) {
-                // Capture the screenshot
-                const screenshot = sources[0].thumbnail;
-
-                // Convert to JPEG for smaller size and faster processing
-                const jpegBuffer = screenshot.toJPEG(85); // 85% quality
-                const base64Data = jpegBuffer.toString('base64');
-
-                // Clear the buffer immediately for security
-                screenshot.clear && screenshot.clear();
-
-                // Return without logging for stealth
-                return { success: true, imageData: base64Data };
-            } else {
-                return { success: false, error: 'No screen sources found' };
-            }
-        } catch (error) {
-            // Don't log the actual error details for stealth
-            return { success: false, error: 'Capture failed' };
-        }
+        return await captureScreenJpegBase64({ quality: 85 });
     });
 }
 

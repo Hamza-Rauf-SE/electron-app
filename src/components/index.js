@@ -11,3 +11,5 @@ export { AssistantView } from './views/AssistantView.js';
 export { OnboardingView } from './views/OnboardingView.js';
 export { AdvancedView } from './views/AdvancedView.js';
 export { ChatView } from './views/ChatView.js';
+export { OpenAISessionView } from './views/OpenAISessionView.js';
+export { CodexChatView } from './views/CodexChatView.js';

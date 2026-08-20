@@ -351,8 +351,20 @@ export class HelpView extends LitElement {
                         <div class="keyboard-group">
                             <div class="keyboard-group-title">AI Actions</div>
                             <div class="shortcut-item">
-                                <span class="shortcut-description">Take screenshot and ask for next step</span>
+                                <span class="shortcut-description">Take screenshot and ask for next step (targets the active tab)</span>
                                 <div class="shortcut-keys">${this.formatKeybind(this.keybinds.nextStep)}</div>
+                            </div>
+                        </div>
+
+                        <div class="keyboard-group">
+                            <div class="keyboard-group-title">OpenAI Session Tabs</div>
+                            <div class="shortcut-item">
+                                <span class="shortcut-description">Switch to the Realtime tab</span>
+                                <div class="shortcut-keys">${this.formatKeybind(isMacOS ? 'Cmd+1' : 'Ctrl+1')}</div>
+                            </div>
+                            <div class="shortcut-item">
+                                <span class="shortcut-description">Switch to the GPT-5.5 chat tab</span>
+                                <div class="shortcut-keys">${this.formatKeybind(isMacOS ? 'Cmd+2' : 'Ctrl+2')}</div>
                             </div>
                         </div>
 

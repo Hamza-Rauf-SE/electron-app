@@ -4,6 +4,7 @@ export class AssistantView extends LitElement {
     static styles = css`
         :host {
             height: 100%;
+            min-height: 0;
             display: flex;
             flex-direction: column;
         }
@@ -14,7 +15,8 @@ export class AssistantView extends LitElement {
         }
 
         .response-container {
-            height: calc(100% - 60px);
+            flex: 1;
+            min-height: 0;
             overflow-y: auto;
             border-radius: 10px;
             font-size: var(--response-font-size, 18px);
@@ -203,6 +205,7 @@ export class AssistantView extends LitElement {
         }
 
         .text-input-container {
+            flex: 0 0 auto;
             display: flex;
             gap: 10px;
             margin-top: 10px;
@@ -339,6 +342,9 @@ export class AssistantView extends LitElement {
         onSendText: { type: Function },
         shouldAnimateResponse: { type: Boolean },
         savedResponses: { type: Array },
+        paneActive: { type: Boolean },
+        screenshotTarget: { type: String },
+        stickToBottom: { type: Boolean },
     };
 
     constructor() {
@@ -347,6 +353,22 @@ export class AssistantView extends LitElement {
         this.currentResponseIndex = -1;
         this.selectedProfile = 'interview';
         this.onSendText = () => {};
+        // When rendered as a tab pane this is toggled off while hidden; the
+        // standalone (Gemini) usage leaves it true.
+        this.paneActive = true;
+        this.screenshotTarget = null;
+        // Opt-in: only the OpenAI realtime pane holds position when scrolled up.
+        this.stickToBottom = false;
+        // _pinnedToBottom tracks the reader's intent (updated on manual scroll).
+        // _followOnUpdate is the decision for the current content update, frozen
+        // before the DOM rewrite so async scroll events cannot flip it.
+        this._pinnedToBottom = true;
+        this._followOnUpdate = true;
+        // One-shot: survives the position re-sample so an explicitly asked
+        // question still scrolls to its answer.
+        this._forceFollowNext = false;
+        this._suppressScrollTracking = false;
+        this._savedScrollTop = 0;
         this._lastAnimatedWordCount = 0;
         // Load saved responses from localStorage
         try {
@@ -433,6 +455,7 @@ export class AssistantView extends LitElement {
     }
 
     navigateToPreviousResponse() {
+        if (!this.paneActive) return;
         if (this.currentResponseIndex > 0) {
             this.currentResponseIndex--;
             this.dispatchEvent(
@@ -445,6 +468,7 @@ export class AssistantView extends LitElement {
     }
 
     navigateToNextResponse() {
+        if (!this.paneActive) return;
         if (this.currentResponseIndex < this.responses.length - 1) {
             this.currentResponseIndex++;
             this.dispatchEvent(
@@ -457,6 +481,7 @@ export class AssistantView extends LitElement {
     }
 
     scrollResponseUp() {
+        if (!this.paneActive) return;
         const container = this.shadowRoot.querySelector('.response-container');
         if (container) {
             const scrollAmount = container.clientHeight * 0.3; // Scroll 30% of container height
@@ -465,6 +490,7 @@ export class AssistantView extends LitElement {
     }
 
     scrollResponseDown() {
+        if (!this.paneActive) return;
         const container = this.shadowRoot.querySelector('.response-container');
         if (container) {
             const scrollAmount = container.clientHeight * 0.3; // Scroll 30% of container height
@@ -537,9 +563,18 @@ export class AssistantView extends LitElement {
                 ipcRenderer.removeListener('scroll-response-down', this.handleScrollDown);
             }
         }
+
+        const container = this.shadowRoot?.querySelector('.response-container');
+        if (container && this._onResponseScroll) {
+            container.removeEventListener('scroll', this._onResponseScroll);
+            this._onResponseScroll = null;
+        }
     }
 
     async handleSendText() {
+        // Asking a question means you want to see its answer, even if you had
+        // scrolled up to read something older.
+        this._forceFollowNext = true;
         const textInput = this.shadowRoot.querySelector('#textInput');
         if (textInput && textInput.value.trim()) {
             const message = textInput.value.trim();
@@ -562,6 +597,37 @@ export class AssistantView extends LitElement {
                 container.scrollTop = container.scrollHeight;
             }
         }, 0);
+    }
+
+    /** Distance from the bottom under which we treat the view as "following" new answers. */
+    static STICK_THRESHOLD_PX = 48;
+
+    isScrolledToBottom() {
+        const container = this.shadowRoot?.querySelector('.response-container');
+        if (!container) return true;
+        const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+        return distanceFromBottom <= AssistantView.STICK_THRESHOLD_PX;
+    }
+
+    /** Scrolls only if the reader was following the newest answer for this update. */
+    maybeScrollToBottom() {
+        if (this._followOnUpdate) {
+            this.scrollToBottom();
+        }
+    }
+
+    /** Called before the pane is hidden, since display:none discards scrollTop. */
+    captureScrollPosition() {
+        const container = this.shadowRoot?.querySelector('.response-container');
+        if (!container) return;
+        this._savedScrollTop = container.scrollTop;
+        this._pinnedToBottom = this.isScrolledToBottom();
+    }
+
+    restoreScrollPosition() {
+        const container = this.shadowRoot?.querySelector('.response-container');
+        if (!container) return;
+        container.scrollTop = this._pinnedToBottom ? container.scrollHeight : this._savedScrollTop;
     }
 
     scrollToResponseItem(index) {
@@ -597,6 +663,7 @@ export class AssistantView extends LitElement {
     }
 
     async handleScreenshotClick() {
+        this._forceFollowNext = true;
         console.log('[DEBUG] Screenshot button clicked');
         const textInput = this.shadowRoot.querySelector('#textInput');
         const userMessage = textInput?.value.trim() || 'What do you see in this screenshot? Please analyze it and provide a detailed response.';
@@ -623,16 +690,16 @@ export class AssistantView extends LitElement {
             const imageQuality = localStorage.getItem('selectedImageQuality') || 'medium';
             console.log('[DEBUG] Image quality:', imageQuality);
 
-            // Check if we're using OpenAI (Codex will handle the prompt directly)
-            const isOpenAI = window.audioprocess.getCurrentProvider?.() === 'openai';
-            console.log('[DEBUG] Current provider:', window.audioprocess.getCurrentProvider?.(), 'isOpenAI:', isOpenAI);
+            // The realtime API takes the image and the prompt in one message;
+            // Gemini needs them as two separate sends.
+            const target = this.screenshotTarget || (window.audioprocess.getCurrentProvider?.() === 'openai' ? 'openai-realtime' : 'gemini');
+            const isOpenAI = target !== 'gemini';
+            console.log('[DEBUG] Screenshot target:', target);
 
-            // Capture screenshot (this sends the image to the appropriate handler)
             console.log('[DEBUG] Starting screenshot capture...');
-            await window.audioprocess.captureScreenshot(imageQuality, true);
+            await window.audioprocess.captureScreenshot(imageQuality, true, target, isOpenAI ? userMessage : null);
             console.log('[DEBUG] Screenshot capture completed');
 
-            // For OpenAI, Codex handles everything, so don't send follow-up text
             if (!isOpenAI) {
                 // Wait a bit for the image to be sent to the server (Gemini)
                 await new Promise(resolve => setTimeout(resolve, 1500));
@@ -643,8 +710,7 @@ export class AssistantView extends LitElement {
                 }
                 await this.onSendText(userMessage);
             } else {
-                // For OpenAI, Codex already processed the screenshot with the prompt
-                // Just clear the input
+                // The prompt already travelled with the image.
                 if (textInput) {
                     textInput.value = '';
                 }
@@ -660,8 +726,23 @@ export class AssistantView extends LitElement {
         }
     }
 
+    getPendingPrompt() {
+        return this.shadowRoot?.querySelector('#textInput')?.value?.trim() || '';
+    }
+
     firstUpdated() {
         super.firstUpdated();
+
+        const container = this.shadowRoot.querySelector('.response-container');
+        if (container) {
+            this._onResponseScroll = () => {
+                // Ignore the scroll reset that replacing innerHTML triggers.
+                if (this._suppressScrollTracking) return;
+                this._pinnedToBottom = this.isScrolledToBottom();
+            };
+            container.addEventListener('scroll', this._onResponseScroll, { passive: true });
+        }
+
         this.updateResponseContent();
     }
 
@@ -676,8 +757,19 @@ export class AssistantView extends LitElement {
             this.updateResponseContent();
         }
         if (changedProperties.has('currentResponseIndex')) {
-            // Scroll to the response item when navigating
-            this.scrollToResponseItem(this.currentResponseIndex);
+            // A new answer arriving also bumps the index (setResponse sets both
+            // responses and currentResponseIndex), so an index change alone does
+            // not mean the user navigated.
+            //
+            // In stick-to-bottom mode new answers are handled solely by
+            // maybeScrollToBottom(). Using scrollIntoView here as well would fight
+            // it, and it lands on the *top* of the newest answer, which is not
+            // "at the bottom" - so following would switch itself off after one
+            // answer. Explicit navigation still jumps to the chosen response.
+            const isNavigation = !changedProperties.has('responses');
+            if (!this.stickToBottom || isNavigation) {
+                this.scrollToResponseItem(this.currentResponseIndex);
+            }
         }
     }
 
@@ -688,6 +780,26 @@ export class AssistantView extends LitElement {
             console.log('Response container not found');
             return;
         }
+
+        // Sample before innerHTML is replaced; afterwards scrollTop is meaningless.
+        // Skipped while the pane is hidden, where every scroll metric reads zero.
+        if (container.clientHeight > 0) {
+            this._pinnedToBottom = this.isScrolledToBottom();
+        }
+        // Asking a question overrides the hold once, for that answer. This has to
+        // come after the re-sample above, which would otherwise erase it.
+        if (this._forceFollowNext) {
+            this._pinnedToBottom = true;
+            this._forceFollowNext = false;
+        }
+        this._followOnUpdate = !this.stickToBottom || this._pinnedToBottom;
+
+        // Replacing innerHTML below resets scrollTop, and the resulting scroll
+        // event must not be mistaken for the reader scrolling away.
+        this._suppressScrollTracking = true;
+        requestAnimationFrame(() => {
+            this._suppressScrollTracking = false;
+        });
 
         const allResponses = this.getAllResponses();
 
@@ -742,8 +854,8 @@ export class AssistantView extends LitElement {
                             lastResponseWords[i].classList.add('visible');
                             if (i === lastResponseWords.length - 1) {
                                 this.dispatchEvent(new CustomEvent('response-animation-complete', { bubbles: true, composed: true }));
-                                // Scroll to bottom after animation
-                                this.scrollToBottom();
+                                // Follow the new answer only if the reader was already at the bottom
+                                this.maybeScrollToBottom();
                             }
                         },
                         (i - this._lastAnimatedWordCount) * 100
@@ -754,9 +866,8 @@ export class AssistantView extends LitElement {
         } else {
             words.forEach(word => word.classList.add('visible'));
             this._lastAnimatedWordCount = 0;
-            // Scroll to bottom for new content
             if (allResponses.length > 0) {
-                this.scrollToBottom();
+                this.maybeScrollToBottom();
             }
         }
     }
