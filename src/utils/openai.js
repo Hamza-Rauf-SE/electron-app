@@ -11,7 +11,7 @@ const { setupOpenAICodexIpcHandlers, resetCodexState, abortCodexStream } = requi
 
 const OPENAI_REALTIME_MODEL = 'gpt-realtime-1.5';
 // How many prior turns to replay into a freshly reconnected realtime conversation.
-const REALTIME_REPLAY_TURNS = 4;
+const REALTIME_REPLAY_TURNS = 7;
 
 // Conversation tracking variables
 let currentSessionId = null;
