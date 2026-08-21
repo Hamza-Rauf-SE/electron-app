@@ -28,6 +28,12 @@ export class AssistantView extends LitElement {
             cursor: text;
         }
 
+        .response-tail-spacer {
+            flex: 0 0 auto;
+            pointer-events: none;
+            user-select: none;
+        }
+
         /* Allow text selection for all content within the response container */
         .response-container * {
             user-select: text;
@@ -344,7 +350,7 @@ export class AssistantView extends LitElement {
         savedResponses: { type: Array },
         paneActive: { type: Boolean },
         screenshotTarget: { type: String },
-        stickToBottom: { type: Boolean },
+        followLatest: { type: Boolean },
     };
 
     constructor() {
@@ -357,12 +363,13 @@ export class AssistantView extends LitElement {
         // standalone (Gemini) usage leaves it true.
         this.paneActive = true;
         this.screenshotTarget = null;
-        // Opt-in: only the OpenAI realtime pane holds position when scrolled up.
-        this.stickToBottom = false;
-        // _pinnedToBottom tracks the reader's intent (updated on manual scroll).
+        // Opt-in: only the OpenAI realtime pane top-aligns new answers and holds
+        // position while the reader is scrolled up.
+        this.followLatest = false;
+        // _following tracks the reader's intent (updated on manual scroll).
         // _followOnUpdate is the decision for the current content update, frozen
         // before the DOM rewrite so async scroll events cannot flip it.
-        this._pinnedToBottom = true;
+        this._following = true;
         this._followOnUpdate = true;
         // One-shot: survives the position re-sample so an explicitly asked
         // question still scrolls to its answer.
@@ -599,19 +606,79 @@ export class AssistantView extends LitElement {
         }, 0);
     }
 
-    /** Distance from the bottom under which we treat the view as "following" new answers. */
-    static STICK_THRESHOLD_PX = 48;
+    /** Slack allowed when deciding whether the newest answer is still the one in view. */
+    static FOLLOW_THRESHOLD_PX = 48;
 
-    isScrolledToBottom() {
+    /** Offset of the newest answer's top edge within the scrollable content. */
+    getLatestItemOffset() {
+        const container = this.shadowRoot?.querySelector('.response-container');
+        if (!container) return 0;
+        const items = container.querySelectorAll('.response-item');
+        const last = items[items.length - 1];
+        if (!last) return 0;
+        // Measured rather than offsetTop, which is relative to the offsetParent.
+        return last.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
+    }
+
+    /**
+     * "Following" means the newest answer is what you are looking at - either its
+     * start is at the top of the view, or you have scrolled down into it.
+     *
+     * Note this is deliberately not "scrolled to the bottom": new answers get
+     * top-aligned, which leaves the rest of the answer below the fold, so a
+     * bottom-based test would report "scrolled away" immediately after we scrolled.
+     */
+    isFollowingLatest() {
         const container = this.shadowRoot?.querySelector('.response-container');
         if (!container) return true;
-        const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-        return distanceFromBottom <= AssistantView.STICK_THRESHOLD_PX;
+        if (this.getAllResponses().length <= 1) return true;
+        return container.scrollTop >= this.getLatestItemOffset() - AssistantView.FOLLOW_THRESHOLD_PX;
+    }
+
+    /** Puts the newest answer's first line at the top of the view. */
+    scrollLatestToTop() {
+        setTimeout(() => {
+            const container = this.shadowRoot?.querySelector('.response-container');
+            if (container) {
+                container.scrollTop = this.getLatestItemOffset();
+            }
+        }, 0);
+    }
+
+    /**
+     * Grows a trailing spacer so the newest answer can reach the top of the view.
+     *
+     * Without it a short answer cannot be scrolled up that far - the content
+     * simply ends - and it also leaves room to scroll up into older answers.
+     */
+    updateTailSpacer() {
+        const container = this.shadowRoot?.querySelector('.response-container');
+        const spacer = container?.querySelector('.response-tail-spacer');
+        if (!container || !spacer) return;
+
+        if (!this.followLatest || container.clientHeight === 0) {
+            spacer.style.height = '0px';
+            return;
+        }
+
+        const items = container.querySelectorAll('.response-item');
+        const last = items[items.length - 1];
+        if (!last) {
+            spacer.style.height = '0px';
+            return;
+        }
+
+        spacer.style.height = '0px';
+        const lastHeight = last.getBoundingClientRect().height;
+        spacer.style.height = `${Math.max(0, container.clientHeight - lastHeight)}px`;
     }
 
     /** Scrolls only if the reader was following the newest answer for this update. */
-    maybeScrollToBottom() {
-        if (this._followOnUpdate) {
+    maybeFollowLatest() {
+        if (!this._followOnUpdate) return;
+        if (this.followLatest) {
+            this.scrollLatestToTop();
+        } else {
             this.scrollToBottom();
         }
     }
@@ -621,13 +688,19 @@ export class AssistantView extends LitElement {
         const container = this.shadowRoot?.querySelector('.response-container');
         if (!container) return;
         this._savedScrollTop = container.scrollTop;
-        this._pinnedToBottom = this.isScrolledToBottom();
+        this._following = this.isFollowingLatest();
     }
 
     restoreScrollPosition() {
         const container = this.shadowRoot?.querySelector('.response-container');
         if (!container) return;
-        container.scrollTop = this._pinnedToBottom ? container.scrollHeight : this._savedScrollTop;
+        if (!this._following) {
+            container.scrollTop = this._savedScrollTop;
+        } else if (this.followLatest) {
+            container.scrollTop = this.getLatestItemOffset();
+        } else {
+            container.scrollTop = container.scrollHeight;
+        }
     }
 
     scrollToResponseItem(index) {
@@ -738,7 +811,7 @@ export class AssistantView extends LitElement {
             this._onResponseScroll = () => {
                 // Ignore the scroll reset that replacing innerHTML triggers.
                 if (this._suppressScrollTracking) return;
-                this._pinnedToBottom = this.isScrolledToBottom();
+                this._following = this.isFollowingLatest();
             };
             container.addEventListener('scroll', this._onResponseScroll, { passive: true });
         }
@@ -761,13 +834,11 @@ export class AssistantView extends LitElement {
             // responses and currentResponseIndex), so an index change alone does
             // not mean the user navigated.
             //
-            // In stick-to-bottom mode new answers are handled solely by
-            // maybeScrollToBottom(). Using scrollIntoView here as well would fight
-            // it, and it lands on the *top* of the newest answer, which is not
-            // "at the bottom" - so following would switch itself off after one
-            // answer. Explicit navigation still jumps to the chosen response.
+            // In follow-latest mode new answers are handled solely by
+            // maybeFollowLatest(); calling scrollIntoView here too would fight it.
+            // Explicit navigation still jumps to the chosen response.
             const isNavigation = !changedProperties.has('responses');
-            if (!this.stickToBottom || isNavigation) {
+            if (!this.followLatest || isNavigation) {
                 this.scrollToResponseItem(this.currentResponseIndex);
             }
         }
@@ -784,15 +855,15 @@ export class AssistantView extends LitElement {
         // Sample before innerHTML is replaced; afterwards scrollTop is meaningless.
         // Skipped while the pane is hidden, where every scroll metric reads zero.
         if (container.clientHeight > 0) {
-            this._pinnedToBottom = this.isScrolledToBottom();
+            this._following = this.isFollowingLatest();
         }
         // Asking a question overrides the hold once, for that answer. This has to
         // come after the re-sample above, which would otherwise erase it.
         if (this._forceFollowNext) {
-            this._pinnedToBottom = true;
+            this._following = true;
             this._forceFollowNext = false;
         }
-        this._followOnUpdate = !this.stickToBottom || this._pinnedToBottom;
+        this._followOnUpdate = !this.followLatest || this._following;
 
         // Replacing innerHTML below resets scrollTop, and the resulting scroll
         // event must not be mistaken for the reader scrolling away.
@@ -826,7 +897,11 @@ export class AssistantView extends LitElement {
             `;
         });
 
+        // Trailing room so the newest answer can be scrolled to the very top.
+        allHtml += '<div class="response-tail-spacer"></div>';
+
         container.innerHTML = allHtml;
+        this.updateTailSpacer();
 
         // Handle animation for the latest response
         const words = container.querySelectorAll('[data-word]');
@@ -854,8 +929,8 @@ export class AssistantView extends LitElement {
                             lastResponseWords[i].classList.add('visible');
                             if (i === lastResponseWords.length - 1) {
                                 this.dispatchEvent(new CustomEvent('response-animation-complete', { bubbles: true, composed: true }));
-                                // Follow the new answer only if the reader was already at the bottom
-                                this.maybeScrollToBottom();
+                                // Follow the new answer only if the reader was already following
+                                this.maybeFollowLatest();
                             }
                         },
                         (i - this._lastAnimatedWordCount) * 100
@@ -867,7 +942,7 @@ export class AssistantView extends LitElement {
             words.forEach(word => word.classList.add('visible'));
             this._lastAnimatedWordCount = 0;
             if (allResponses.length > 0) {
-                this.maybeScrollToBottom();
+                this.maybeFollowLatest();
             }
         }
     }

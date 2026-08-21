@@ -397,7 +397,7 @@ export class OpenAISessionView extends LitElement {
                         .shouldAnimateResponse=${this.shouldAnimateResponse}
                         .paneActive=${realtimeActiveTab}
                         .screenshotTarget=${'openai-realtime'}
-                        .stickToBottom=${true}
+                        .followLatest=${true}
                         .onSendText=${message => this.onSendRealtimeText(message)}
                         @response-index-changed=${e => this.onResponseIndexChanged(e)}
                     ></assistant-view>
