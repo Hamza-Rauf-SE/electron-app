@@ -11,7 +11,18 @@ const { setupOpenAICodexIpcHandlers, resetCodexState, abortCodexStream } = requi
 
 const OPENAI_REALTIME_MODEL = 'gpt-realtime-1.5';
 // How many prior turns to replay into a freshly reconnected realtime conversation.
-const REALTIME_REPLAY_TURNS = 7;
+const REALTIME_REPLAY_TURNS = 10;
+// History is held in memory and replayed on every reconnect, so it is capped
+// rather than allowed to grow for the length of a session.
+const MAX_CONVERSATION_TURNS = 15;
+// How often the realtime socket is recycled. A long-lived session accumulates
+// server-side context; reconnecting drops it, and the last
+// REALTIME_REPLAY_TURNS are replayed so the conversation carries over.
+// Set to 0 to disable automatic restarts.
+const REALTIME_RESTART_INTERVAL_MS = 2 * 60 * 1000;
+// How many answers stay rendered in the transcript. Every update re-renders all
+// of them, so this bounds both the DOM size and the per-update work.
+const MAX_VISIBLE_RESPONSES = 15;
 
 // Conversation tracking variables
 let currentSessionId = null;
@@ -80,6 +91,9 @@ function saveConversationTurn(transcription, aiResponse) {
     };
 
     conversationHistory.push(conversationTurn);
+    if (conversationHistory.length > MAX_CONVERSATION_TURNS) {
+        conversationHistory = conversationHistory.slice(-MAX_CONVERSATION_TURNS);
+    }
     console.log('Saved conversation turn:', conversationTurn);
 
     // Send to renderer to save in IndexedDB
@@ -94,6 +108,15 @@ function getCurrentSessionData() {
     return {
         sessionId: currentSessionId,
         history: conversationHistory,
+    };
+}
+
+function getRealtimeConfig() {
+    return {
+        restartIntervalMs: REALTIME_RESTART_INTERVAL_MS,
+        maxVisibleResponses: MAX_VISIBLE_RESPONSES,
+        maxConversationTurns: MAX_CONVERSATION_TURNS,
+        replayTurns: REALTIME_REPLAY_TURNS,
     };
 }
 
@@ -162,13 +185,27 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
 
     try {
         const url = `wss://api.openai.com/v1/realtime?model=${OPENAI_REALTIME_MODEL}`;
-        openaiWebSocket = new WebSocket(url, {
+        // Handlers close over this instance rather than reading the module-level
+        // openaiWebSocket. During a restart the previous socket's close event
+        // arrives *after* the replacement has been assigned, so anything reading
+        // the shared variable would act on - or null out - the wrong socket.
+        const ws = new WebSocket(url, {
             headers: {
                 Authorization: `Bearer ${trimmedKey}`,
             },
         });
+        openaiWebSocket = ws;
 
-        openaiWebSocket.on('open', function open() {
+        /** Events from a socket we have already replaced must be ignored. */
+        const isCurrentSocket = () => openaiWebSocket === ws;
+
+        ws.on('open', function open() {
+            if (!isCurrentSocket()) {
+                console.log('Ignoring open from a superseded OpenAI socket');
+                ws.close();
+                return;
+            }
+
             console.log('Connected to OpenAI Realtime API');
             sendToRenderer('update-status', 'OpenAI session connected');
 
@@ -198,16 +235,17 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
                 },
             };
 
-            openaiWebSocket.send(JSON.stringify(sessionUpdateEvent));
+            ws.send(JSON.stringify(sessionUpdateEvent));
 
             if (preserveConversation) {
-                replayConversationContext(openaiWebSocket);
+                replayConversationContext(ws);
             }
 
             sendToRenderer('realtime-state', { state: 'active', audioActive: realtimeAudioActive });
         });
 
-        openaiWebSocket.on('message', function incoming(message) {
+        ws.on('message', function incoming(message) {
+            if (!isCurrentSocket()) return;
             try {
                 const event = JSON.parse(message.toString());
                 console.log('OpenAI event:', event.type);
@@ -275,15 +313,19 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
             }
         });
 
-        openaiWebSocket.on('error', function error(err) {
+        ws.on('error', function error(err) {
             console.error('OpenAI WebSocket error:', err);
+            if (!isCurrentSocket()) return;
             sendToRenderer('update-status', `Error: ${err.message || 'Connection error'}`);
             isInitializingSession = false;
             sendToRenderer('session-initializing', false);
         });
 
-        openaiWebSocket.on('close', function close(code, reason) {
+        ws.on('close', function close(code, reason) {
             console.log('OpenAI WebSocket closed:', code, reason);
+            // A superseded socket closing must not tear down its replacement.
+            if (!isCurrentSocket()) return;
+
             openaiWebSocket = null;
             openaiSessionRef.current = null;
             realtimeResponseActive = false;
@@ -301,7 +343,7 @@ async function initializeOpenAISession(apiKey, customPrompt = '', profile = 'int
             }
         });
 
-        openaiSessionRef.current = openaiWebSocket;
+        openaiSessionRef.current = ws;
         isInitializingSession = false;
         sendToRenderer('session-initializing', false);
         return true;
@@ -580,6 +622,12 @@ function setupOpenAIIpcHandlers(sessionRef) {
         return { success: true, state: getRealtimeState() };
     });
 
+    // The renderer owns the restart timer and the transcript, but the values
+    // live here so every realtime tunable sits in one place.
+    ipcMain.handle('get-realtime-openai-config', async () => {
+        return { success: true, config: getRealtimeConfig() };
+    });
+
     ipcMain.handle('close-openai-session', async event => {
         try {
             abortCodexStream();
@@ -641,6 +689,7 @@ module.exports = {
     saveConversationTurn,
     getCurrentSessionData,
     getRealtimeState,
+    getRealtimeConfig,
     killExistingSystemAudioDump,
     startMacOSAudioCapture,
     convertStereoToMono,

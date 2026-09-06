@@ -182,4 +182,63 @@ describe('OpenAI realtime text and image frames', () => {
         expect(items[0].item.content[0].text).toBe('earlier question');
         expect(items[1].item.role).toBe('assistant');
     });
+
+    // Reproduces the crash seen after an automatic restart:
+    //   TypeError: Cannot read properties of null (reading 'send')
+    // The previous socket's close event lands *after* the replacement has been
+    // assigned. When handlers read the shared module variable, that close nulled
+    // out the new socket and its open handler then called .send() on null.
+    describe('socket replacement during a restart', () => {
+        it('survives the old socket closing after the new one is created', async () => {
+            constructedSockets.length = 0;
+            const { initializeOpenAISession } = require('../utils/openai');
+
+            await initializeOpenAISession('sk-test', '', 'interview', 'en-US');
+            const oldSocket = constructedSockets.at(-1);
+
+            // Restart: a fresh socket is created while the old one is still closing.
+            await initializeOpenAISession('sk-test', '', 'interview', 'en-US', { preserveConversation: true });
+            const newSocket = constructedSockets.at(-1);
+            expect(newSocket).not.toBe(oldSocket);
+
+            // The stale close arrives now, after the replacement exists.
+            oldSocket.handlers.close(1000, 'suspended');
+
+            // This used to throw; the session.update must still go out.
+            expect(() => newSocket.handlers.open()).not.toThrow();
+            expect(newSocket.frames.find(frame => frame.type === 'session.update')).toBeDefined();
+        });
+
+        it('ignores messages and errors from a superseded socket', async () => {
+            constructedSockets.length = 0;
+            const { initializeOpenAISession } = require('../utils/openai');
+
+            await initializeOpenAISession('sk-test', '', 'interview', 'en-US');
+            const oldSocket = constructedSockets.at(-1);
+            await initializeOpenAISession('sk-test', '', 'interview', 'en-US', { preserveConversation: true });
+
+            rendererSends.length = 0;
+            oldSocket.handlers.message(JSON.stringify({ type: 'response.output_text.done', text: 'stale answer' }));
+            oldSocket.handlers.error(new Error('stale failure'));
+
+            // Nothing from the old socket may reach the UI.
+            expect(rendererSends).toHaveLength(0);
+        });
+
+        it('closes a socket that connects after it was replaced', async () => {
+            constructedSockets.length = 0;
+            const { initializeOpenAISession } = require('../utils/openai');
+
+            await initializeOpenAISession('sk-test', '', 'interview', 'en-US');
+            const oldSocket = constructedSockets.at(-1);
+            oldSocket.close = vi.fn();
+
+            await initializeOpenAISession('sk-test', '', 'interview', 'en-US', { preserveConversation: true });
+
+            // A late connect on the stale socket should hang up, not configure itself.
+            oldSocket.handlers.open();
+            expect(oldSocket.close).toHaveBeenCalled();
+            expect(oldSocket.frames.find(frame => frame.type === 'session.update')).toBeUndefined();
+        });
+    });
 });

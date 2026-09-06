@@ -11,6 +11,13 @@ import { ChatView } from '../views/ChatView.js';
 import { OpenAISessionView } from '../views/OpenAISessionView.js';
 import { CodexChatView } from '../views/CodexChatView.js';
 
+// Realtime tunables are declared in src/utils/openai.js and fetched over IPC at
+// session start; these are only the fallbacks used until that resolves.
+const DEFAULT_REALTIME_CONFIG = {
+    restartIntervalMs: 15 * 60 * 1000,
+    maxVisibleResponses: 15,
+};
+
 export class AudioProcessApp extends LitElement {
     static styles = css`
         * {
@@ -184,6 +191,8 @@ export class AudioProcessApp extends LitElement {
         this.codexUnread = 0;
         this._codexTimer = null;
         this._codexStartedAt = null;
+        this._realtimeRestartTimer = null;
+        this._realtimeConfig = { ...DEFAULT_REALTIME_CONFIG };
 
         // Apply layout mode and theme to document root
         this.updateLayoutMode();
@@ -316,6 +325,7 @@ export class AudioProcessApp extends LitElement {
             ipcRenderer.removeAllListeners('codex-chat-error');
         }
         this.stopCodexTimer();
+        this.clearRealtimeRestart();
     }
 
     setStatus(text) {
@@ -369,8 +379,21 @@ export class AudioProcessApp extends LitElement {
             this._currentResponseIsComplete = false;
             console.log('[setResponse] → ADDED NEW (complete was true) #' + this.responses.length);
         }
+        this.trimResponses();
         this.shouldAnimateResponse = shouldAnimate;
         this.requestUpdate();
+    }
+
+    /** Drops the oldest answers, keeping currentResponseIndex pointing at the same one. */
+    trimResponses() {
+        const limit = this._realtimeConfig.maxVisibleResponses;
+        if (!limit || limit <= 0) return;
+
+        const overflow = this.responses.length - limit;
+        if (overflow <= 0) return;
+
+        this.responses = this.responses.slice(overflow);
+        this.currentResponseIndex = Math.max(0, this.currentResponseIndex - overflow);
     }
 
     // Header event handlers
@@ -490,6 +513,8 @@ export class AudioProcessApp extends LitElement {
         this.stopCodexTimer();
         this.codexLoading = false;
 
+        await this.loadRealtimeConfig();
+
         if (window.require) {
             const { ipcRenderer } = window.require('electron');
             await ipcRenderer.invoke('codex-clear-history').catch(() => {});
@@ -505,10 +530,12 @@ export class AudioProcessApp extends LitElement {
         this._currentResponseIsComplete = false;
         this.startTime = Date.now();
         this.currentView = 'assistant';
+        this.scheduleRealtimeRestart();
         console.log('[handleStartOpenAI] OpenAI session started - flags reset');
     }
 
     resetSessionState() {
+        this.clearRealtimeRestart();
         this.sessionProvider = null;
         this.activeSessionTab = 'realtime';
         this.realtimeActive = false;
@@ -560,6 +587,55 @@ export class AudioProcessApp extends LitElement {
         }
     }
 
+    /** Pulls the realtime tunables from the main process, where they are declared. */
+    async loadRealtimeConfig() {
+        if (!window.require) return;
+        const { ipcRenderer } = window.require('electron');
+        const result = await ipcRenderer.invoke('get-realtime-openai-config').catch(() => null);
+        if (result?.success && result.config) {
+            this._realtimeConfig = { ...DEFAULT_REALTIME_CONFIG, ...result.config };
+        }
+    }
+
+    scheduleRealtimeRestart() {
+        this.clearRealtimeRestart();
+
+        const interval = this._realtimeConfig.restartIntervalMs;
+        if (!interval || interval <= 0) return; // automatic restarts disabled
+
+        this._realtimeRestartTimer = setTimeout(() => this.restartRealtime(), interval);
+    }
+
+    clearRealtimeRestart() {
+        if (this._realtimeRestartTimer) {
+            clearTimeout(this._realtimeRestartTimer);
+            this._realtimeRestartTimer = null;
+        }
+    }
+
+    /**
+     * Recycles the realtime socket on a timer. Long-lived sessions accumulate
+     * server-side context; reconnecting drops it, and resume-realtime-openai
+     * replays the recent turns so the conversation carries over.
+     */
+    async restartRealtime() {
+        if (!this.realtimeActive || this.currentView !== 'assistant') {
+            this.clearRealtimeRestart();
+            return;
+        }
+
+        if (this.realtimeBusy) {
+            // Mid-transition; try again shortly rather than interleaving.
+            this._realtimeRestartTimer = setTimeout(() => this.restartRealtime(), 30 * 1000);
+            return;
+        }
+
+        console.log('[realtime] scheduled session refresh');
+        this.setStatus('Refreshing realtime session...');
+        await this.stopRealtime({ statusText: 'Refreshing realtime session...' });
+        await this.startRealtime();
+    }
+
     async handleToggleRealtime() {
         if (this.realtimeBusy) return;
         if (this.realtimeActive) {
@@ -569,10 +645,11 @@ export class AudioProcessApp extends LitElement {
         }
     }
 
-    async stopRealtime() {
+    async stopRealtime({ statusText = 'Pausing realtime...' } = {}) {
         if (!window.require || this.realtimeBusy) return;
+        this.clearRealtimeRestart();
         this.realtimeBusy = true;
-        this.setStatus('Pausing realtime...');
+        this.setStatus(statusText);
 
         try {
             const { ipcRenderer } = window.require('electron');
@@ -582,7 +659,7 @@ export class AudioProcessApp extends LitElement {
             await ipcRenderer.invoke('suspend-realtime-openai').catch(() => {});
             this.realtimeActive = false;
             this.realtimeSuspended = true;
-            this.setStatus('Realtime paused');
+            this.setStatus(statusText === 'Pausing realtime...' ? 'Realtime paused' : statusText);
         } finally {
             this.realtimeBusy = false;
         }
@@ -607,6 +684,7 @@ export class AudioProcessApp extends LitElement {
             this.realtimeActive = true;
             this.realtimeSuspended = false;
             this.setStatus('Listening...');
+            this.scheduleRealtimeRestart();
         } finally {
             this.realtimeBusy = false;
         }

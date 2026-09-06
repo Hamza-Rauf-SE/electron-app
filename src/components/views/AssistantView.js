@@ -407,7 +407,12 @@ export class AssistantView extends LitElement {
         return this.responses.length > 0 ? this.responses : [];
     }
 
-    renderMarkdown(content) {
+    /**
+     * @param {boolean} wrapWords Wrap each word in a span for the reveal animation.
+     *   Off by default: the spans start at opacity 0 with a 0.5s transition, so
+     *   re-rendering unanimated text would make all of it fade back in.
+     */
+    renderMarkdown(content, wrapWords = false) {
         // Check if marked is available
         if (typeof window !== 'undefined' && window.marked) {
             try {
@@ -417,9 +422,8 @@ export class AssistantView extends LitElement {
                     gfm: true,
                     sanitize: false, // We trust the AI responses
                 });
-                let rendered = window.marked.parse(content);
-                rendered = this.wrapWordsInSpans(rendered);
-                return rendered;
+                const rendered = window.marked.parse(content);
+                return wrapWords ? this.wrapWordsInSpans(rendered) : rendered;
             } catch (error) {
                 console.warn('Error parsing markdown:', error);
                 return content; // Fallback to plain text
@@ -673,14 +677,17 @@ export class AssistantView extends LitElement {
         spacer.style.height = `${Math.max(0, container.clientHeight - lastHeight)}px`;
     }
 
-    /** Scrolls only if the reader was following the newest answer for this update. */
+    /**
+     * Scrolls only if the reader was following the newest answer for this update.
+     *
+     * Applied synchronously: replacing innerHTML has just reset scrollTop to 0,
+     * and correcting that a frame later makes the transcript visibly jump.
+     */
     maybeFollowLatest() {
         if (!this._followOnUpdate) return;
-        if (this.followLatest) {
-            this.scrollLatestToTop();
-        } else {
-            this.scrollToBottom();
-        }
+        const container = this.shadowRoot?.querySelector('.response-container');
+        if (!container) return;
+        container.scrollTop = this.followLatest ? this.getLatestItemOffset() : container.scrollHeight;
     }
 
     /** Called before the pane is hidden, since display:none discards scrollTop. */
@@ -885,10 +892,14 @@ export class AssistantView extends LitElement {
             return;
         }
 
-        // Render all responses with separators
+        // Render all responses with separators. Only the answer that is about to
+        // be animated gets word spans - wrapping the rest would make the text
+        // already on screen fade out and back in on every new answer.
+        const animateLast = this.shouldAnimateResponse && allResponses.length > 0;
         let allHtml = '';
         allResponses.forEach((response, index) => {
-            const renderedResponse = this.renderMarkdown(response);
+            const isLast = index === allResponses.length - 1;
+            const renderedResponse = this.renderMarkdown(response, animateLast && isLast);
 
             allHtml += `
                 <div class="response-item" data-response-index="${index}">
@@ -904,19 +915,10 @@ export class AssistantView extends LitElement {
         this.updateTailSpacer();
 
         // Handle animation for the latest response
-        const words = container.querySelectorAll('[data-word]');
-        if (this.shouldAnimateResponse && allResponses.length > 0) {
-            // Only animate words in the last response item
+        if (animateLast) {
             const lastResponseItem = container.querySelector(`.response-item[data-response-index="${allResponses.length - 1}"]`);
             if (lastResponseItem) {
                 const lastResponseWords = lastResponseItem.querySelectorAll('[data-word]');
-
-                // Make all previous words visible immediately
-                words.forEach(word => {
-                    if (!lastResponseItem.contains(word)) {
-                        word.classList.add('visible');
-                    }
-                });
 
                 // Animate the latest response
                 for (let i = 0; i < this._lastAnimatedWordCount && i < lastResponseWords.length; i++) {
@@ -939,7 +941,7 @@ export class AssistantView extends LitElement {
                 this._lastAnimatedWordCount = lastResponseWords.length;
             }
         } else {
-            words.forEach(word => word.classList.add('visible'));
+            // No spans were produced, so the text is already at full opacity.
             this._lastAnimatedWordCount = 0;
             if (allResponses.length > 0) {
                 this.maybeFollowLatest();

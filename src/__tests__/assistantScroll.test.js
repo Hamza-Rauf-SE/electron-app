@@ -121,7 +121,7 @@ function mount({ followLatest, answerHeight = ANSWER_HEIGHT }) {
             container.emitScroll();
         },
         /** Mirrors AudioProcessApp.setResponse: appends a response AND moves the index. */
-        arriveNewResponse(count) {
+        arriveNewResponse(count, { animate = false } = {}) {
             container.pendingAnswerCount = count;
             const changed = new Map([
                 ['responses', Array.from({ length: count - 1 }, (_, i) => `answer ${i}`)],
@@ -129,7 +129,7 @@ function mount({ followLatest, answerHeight = ANSWER_HEIGHT }) {
             ]);
             view.responses = Array.from({ length: count }, (_, i) => `answer ${i}`);
             view.currentResponseIndex = count - 1;
-            view.shouldAnimateResponse = false;
+            view.shouldAnimateResponse = animate;
             view.updated(changed);
         },
         navigateTo(index) {
@@ -293,5 +293,57 @@ describe('realtime transcript scroll behavior', () => {
         expect(h.container.spacerHeight).toBe(0);
         expect(h.container.scrollTop).toBe(h.container.scrollHeight);
         expect(scrolledIndex).toBe(4);
+    });
+});
+
+describe('no-flicker rendering', () => {
+    beforeEach(() => {
+        // Minimal markdown so wrapWordsInSpans has real HTML to walk.
+        window.marked = { setOptions: () => {}, parse: text => `<p>${text}</p>` };
+    });
+
+    afterEach(() => {
+        delete window.marked;
+    });
+
+    it('does not wrap words in spans by default', () => {
+        const view = new AssistantView();
+        // The spans start at opacity 0 with a 0.5s transition, so wrapping text
+        // that is not being animated makes it fade back in on every update.
+        expect(view.renderMarkdown('hello there')).not.toContain('data-word');
+    });
+
+    it('wraps words only when the caller asks to animate', () => {
+        const view = new AssistantView();
+        expect(view.renderMarkdown('hello there', true)).toContain('data-word');
+    });
+
+    it('renders an unanimated update with no animatable spans at all', async () => {
+        const h = mount({ followLatest: true });
+        h.arriveNewResponse(3);
+        await settle();
+
+        // Nothing on screen can fade, because nothing is wrapped.
+        expect(h.container.innerHTML).not.toContain('data-word');
+    });
+
+    it('leaves already-rendered answers unwrapped when animating a new one', async () => {
+        const h = mount({ followLatest: true });
+        h.arriveNewResponse(3, { animate: true });
+        await settle();
+
+        // Exactly one response item carries word spans: the newest.
+        const itemsWithWords = h.container.innerHTML.split('class="response-item"').filter(chunk => chunk.includes('data-word'));
+        expect(itemsWithWords).toHaveLength(1);
+    });
+
+    it('applies the follow scroll synchronously so the view never jumps', () => {
+        const h = mount({ followLatest: true });
+
+        // No await: replacing innerHTML reset scrollTop to 0, and if the
+        // correction were deferred the transcript would visibly jump first.
+        h.arriveNewResponse(3);
+
+        expect(h.container.scrollTop).toBe(h.latestTop());
     });
 });
